@@ -1,0 +1,58 @@
+{
+  "menus": [
+    {
+      "path": "/holdings",
+      "label": "持仓管理",
+      "permission": "holdings:view",
+      "children": [
+        {"path": "/holdings", "label": "持仓列表", "permission": "holdings:view"},
+        {"path": "/holdings/buy", "label": "买入", "permission": "holdings:edit"},
+        {"path": "/holdings/history", "label": "历史记录", "permission": "holdings:view"},
+        {"path": "/holdings/summary", "label": "持仓汇总", "permission": "holdings:view"}
+      ]
+    },
+    {
+      "path": "/sectors",
+      "label": "板块热力图",
+      "permission": "sectors:view",
+      "children": [
+        {"path": "/sectors/heatmap", "label": "热力图", "permission": "sectors:view"}
+      ]
+    },
+    {
+      "path": "/selections",
+      "label": "策略选股",
+      "permission": "selections:view",
+      "children": [
+        {"path": "/selections/dual-ma", "label": "双均线选股", "permission": "selections:view"},
+        {"path": "/selections/news", "label": "新闻选股", "permission": "selections:view"}
+      ]
+    },
+    {
+      "path": "/news",
+      "label": "新闻浏览",
+      "permission": "holdings:view",
+      "children": [
+        {"path": "/news", "label": "新闻列表", "permission": "holdings:view"}
+      ]
+    },
+    {
+      "path": "/admin",
+      "label": "系统管理",
+      "permission": "users:view",
+      "children": [
+        {"path": "/admin/users", "label": "用户管理", "permission": "users:view"},
+        {"path": "/admin/roles", "label": "角色管理", "permission": "roles:view"},
+      {"path": "/admin/settings", "label": "系统设置", "permission": "settings:view"}
+    ]
+  },
+  {
+    "path": "/rules",
+    "label": "交易规则",
+    "permission": "rules:view",
+    "children": [
+      {"path": "/rules", "label": "规则列表", "permission": "rules:view"}
+    ]
+  }
+]
+}

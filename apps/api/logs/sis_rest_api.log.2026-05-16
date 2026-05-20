@@ -1,0 +1,78 @@
+2026-05-16 13:57:02 I 203392 D:\home\apps\api\utils\stock_api.py:65 (get_stock_info)	| [SinaAPI] Request: http://hq.sinajs.cn/list=sh600000, Status: 200
+2026-05-16 13:57:02 I 203392 D:\home\apps\api\utils\stock_api.py:66 (get_stock_info)	| [SinaAPI] Response content: var hq_str_sh600000="浦发银行,9.000,9.020,9.070,9.220,8.930,9.060,9.070,171982587,1559276666.000,391600,9.060,311000,9.050,598200,9.040,270611,9.030,303300,9.020,1089887,9.070,198300,9.080,244400,9.090,14
+2026-05-16 13:57:02 E 203392 D:\home\apps\api\utils\stock_api.py:87 (get_stock_info)	| [SinaAPI] Error fetching info for 600000: invalid literal for int() with base 10: '8.930'
+2026-05-16 13:57:02 I 203392 D:\home\apps\api\utils\stock_api.py:65 (get_stock_info)	| [SinaAPI] Request: http://hq.sinajs.cn/list=sh600000, Status: 200
+2026-05-16 13:57:02 I 203392 D:\home\apps\api\utils\stock_api.py:66 (get_stock_info)	| [SinaAPI] Response content: var hq_str_sh600000="浦发银行,9.000,9.020,9.070,9.220,8.930,9.060,9.070,171982587,1559276666.000,391600,9.060,311000,9.050,598200,9.040,270611,9.030,303300,9.020,1089887,9.070,198300,9.080,244400,9.090,14
+2026-05-16 13:57:02 E 203392 D:\home\apps\api\utils\stock_api.py:87 (get_stock_info)	| [SinaAPI] Error fetching info for 600000: invalid literal for int() with base 10: '8.930'
+2026-05-16 13:57:20 I 203392 D:\home\apps\api\utils\stock_api.py:65 (get_stock_info)	| [SinaAPI] Request: http://hq.sinajs.cn/list=sh600000, Status: 200
+2026-05-16 13:57:20 I 203392 D:\home\apps\api\utils\stock_api.py:66 (get_stock_info)	| [SinaAPI] Response content: var hq_str_sh600000="浦发银行,9.000,9.020,9.070,9.220,8.930,9.060,9.070,171982587,1559276666.000,391600,9.060,311000,9.050,598200,9.040,270611,9.030,303300,9.020,1089887,9.070,198300,9.080,244400,9.090,14
+2026-05-16 13:57:20 E 203392 D:\home\apps\api\utils\stock_api.py:87 (get_stock_info)	| [SinaAPI] Error fetching info for 600000: invalid literal for int() with base 10: '8.930'
+2026-05-16 13:57:24 I 203392 D:\home\apps\api\utils\stock_api.py:65 (get_stock_info)	| [SinaAPI] Request: http://hq.sinajs.cn/list=sh600000, Status: 200
+2026-05-16 13:57:24 I 203392 D:\home\apps\api\utils\stock_api.py:66 (get_stock_info)	| [SinaAPI] Response content: var hq_str_sh600000="浦发银行,9.000,9.020,9.070,9.220,8.930,9.060,9.070,171982587,1559276666.000,391600,9.060,311000,9.050,598200,9.040,270611,9.030,303300,9.020,1089887,9.070,198300,9.080,244400,9.090,14
+2026-05-16 13:57:24 E 203392 D:\home\apps\api\utils\stock_api.py:87 (get_stock_info)	| [SinaAPI] Error fetching info for 600000: invalid literal for int() with base 10: '8.930'
+2026-05-16 13:57:33 I 203392 D:\home\apps\api\utils\stock_api.py:65 (get_stock_info)	| [SinaAPI] Request: http://hq.sinajs.cn/list=sh600000, Status: 200
+2026-05-16 13:57:33 I 203392 D:\home\apps\api\utils\stock_api.py:66 (get_stock_info)	| [SinaAPI] Response content: var hq_str_sh600000="浦发银行,9.000,9.020,9.070,9.220,8.930,9.060,9.070,171982587,1559276666.000,391600,9.060,311000,9.050,598200,9.040,270611,9.030,303300,9.020,1089887,9.070,198300,9.080,244400,9.090,14
+2026-05-16 13:57:33 E 203392 D:\home\apps\api\utils\stock_api.py:87 (get_stock_info)	| [SinaAPI] Error fetching info for 600000: invalid literal for int() with base 10: '8.930'
+2026-05-16 13:59:47 I 191916 D:\home\apps\api\utils\stock_api.py:65 (get_stock_info)	| [SinaAPI] Request: http://hq.sinajs.cn/list=sh600000, Status: 200
+2026-05-16 13:59:47 I 191916 D:\home\apps\api\utils\stock_api.py:66 (get_stock_info)	| [SinaAPI] Response content: var hq_str_sh600000="浦发银行,9.000,9.020,9.070,9.220,8.930,9.060,9.070,171982587,1559276666.000,391600,9.060,311000,9.050,598200,9.040,270611,9.030,303300,9.020,1089887,9.070,198300,9.080,244400,9.090,14
+2026-05-16 13:59:52 I 191916 D:\home\apps\api\utils\stock_api.py:65 (get_stock_info)	| [SinaAPI] Request: http://hq.sinajs.cn/list=sh600000, Status: 200
+2026-05-16 13:59:52 I 191916 D:\home\apps\api\utils\stock_api.py:66 (get_stock_info)	| [SinaAPI] Response content: var hq_str_sh600000="浦发银行,9.000,9.020,9.070,9.220,8.930,9.060,9.070,171982587,1559276666.000,391600,9.060,311000,9.050,598200,9.040,270611,9.030,303300,9.020,1089887,9.070,198300,9.080,244400,9.090,14
+2026-05-16 14:00:18 I 191916 D:\home\apps\api\utils\stock_api.py:65 (get_stock_info)	| [SinaAPI] Request: http://hq.sinajs.cn/list=sh600000, Status: 200
+2026-05-16 14:00:18 I 191916 D:\home\apps\api\utils\stock_api.py:66 (get_stock_info)	| [SinaAPI] Response content: var hq_str_sh600000="浦发银行,9.000,9.020,9.070,9.220,8.930,9.060,9.070,171982587,1559276666.000,391600,9.060,311000,9.050,598200,9.040,270611,9.030,303300,9.020,1089887,9.070,198300,9.080,244400,9.090,14
+2026-05-16 14:03:22 I 191916 D:\home\apps\api\utils\stock_api.py:65 (get_stock_info)	| [SinaAPI] Request: http://hq.sinajs.cn/list=sh600000, Status: 200
+2026-05-16 14:03:22 I 191916 D:\home\apps\api\utils\stock_api.py:66 (get_stock_info)	| [SinaAPI] Response content: var hq_str_sh600000="浦发银行,9.000,9.020,9.070,9.220,8.930,9.060,9.070,171982587,1559276666.000,391600,9.060,311000,9.050,598200,9.040,270611,9.030,303300,9.020,1089887,9.070,198300,9.080,244400,9.090,14
+2026-05-16 14:06:19 I 202100 D:\home\apps\api\utils\stock_api.py:65 (get_stock_info)	| [SinaAPI] Request: http://hq.sinajs.cn/list=sh600000, Status: 200
+2026-05-16 14:06:19 I 202100 D:\home\apps\api\utils\stock_api.py:66 (get_stock_info)	| [SinaAPI] Response content: var hq_str_sh600000="浦发银行,9.000,9.020,9.070,9.220,8.930,9.060,9.070,171982587,1559276666.000,391600,9.060,311000,9.050,598200,9.040,270611,9.030,303300,9.020,1089887,9.070,198300,9.080,244400,9.090,14
+2026-05-16 14:14:07 I 202396 D:\home\apps\api\utils\stock_api.py:65 (get_stock_info)	| [SinaAPI] Request: http://hq.sinajs.cn/list=sh600000, Status: 200
+2026-05-16 14:14:07 I 202396 D:\home\apps\api\utils\stock_api.py:66 (get_stock_info)	| [SinaAPI] Response content: var hq_str_sh600000="浦发银行,9.000,9.020,9.070,9.220,8.930,9.060,9.070,171982587,1559276666.000,391600,9.060,311000,9.050,598200,9.040,270611,9.030,303300,9.020,1089887,9.070,198300,9.080,244400,9.090,14
+2026-05-16 15:53:30 E 206752 D:\home\apps\api\app\core\error.py:40 (validation_exception_handler)	| 请求验证异常: 1 validation error:
+  {'type': 'string_pattern_mismatch', 'loc': ('query', 'period'), 'msg': "String should match pattern '^(24h|7d|30d)$'", 'input': 'custom', 'ctx': {'pattern': '^(24h|7d|30d)$'}}
+
+  File "D:\home\apps\api\routers\sectors.py", line 11, in get_sector_heatmap
+    GET /sectors/heatmap
+2026-05-16 15:53:41 E 206752 D:\home\apps\api\app\core\error.py:40 (validation_exception_handler)	| 请求验证异常: 1 validation error:
+  {'type': 'string_pattern_mismatch', 'loc': ('query', 'period'), 'msg': "String should match pattern '^(24h|7d|30d)$'", 'input': 'custom', 'ctx': {'pattern': '^(24h|7d|30d)$'}}
+
+  File "D:\home\apps\api\routers\sectors.py", line 11, in get_sector_heatmap
+    GET /sectors/heatmap
+2026-05-16 17:22:35 E 208932 D:\home\apps\api\app\core\error.py:31 (http_exception_handler)	| HTTP异常: 'created_at'
+Traceback (most recent call last):
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\middleware\cors.py", line 95, in __call__
+    await self.simple_response(scope, receive, send, request_headers=headers)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\middleware\cors.py", line 153, in simple_response
+    await self.app(scope, receive, send)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\middleware\exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\routing.py", line 736, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\routing.py", line 290, in handle
+    await self.app(scope, receive, send)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\routing.py", line 130, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\routing.py", line 116, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\routing.py", line 670, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\User\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\routing.py", line 324, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\home\apps\api\routers\permissions.py", line 88, in get_permissions
+    "created_at": p["created_at"]
+                  ~^^^^^^^^^^^^^^
+KeyError: 'created_at'

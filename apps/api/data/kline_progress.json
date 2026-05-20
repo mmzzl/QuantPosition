@@ -1,0 +1,962 @@
+{
+  "000001_9": {
+    "code": "000001",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:48:18.039001"
+  },
+  "000002_9": {
+    "code": "000002",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:48:19.290547"
+  },
+  "000004_9": {
+    "code": "000004",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000006_9": {
+    "code": "000006",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000007_9": {
+    "code": "000007",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000008_9": {
+    "code": "000008",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000009_9": {
+    "code": "000009",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000010_9": {
+    "code": "000010",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000011_9": {
+    "code": "000011",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000012_9": {
+    "code": "000012",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000016_9": {
+    "code": "000016",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000017_9": {
+    "code": "000017",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000019_9": {
+    "code": "000019",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000020_9": {
+    "code": "000020",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000021_9": {
+    "code": "000021",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000025_9": {
+    "code": "000025",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000026_9": {
+    "code": "000026",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000027_9": {
+    "code": "000027",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000028_9": {
+    "code": "000028",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000029_9": {
+    "code": "000029",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000030_9": {
+    "code": "000030",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000031_9": {
+    "code": "000031",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000032_9": {
+    "code": "000032",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000034_9": {
+    "code": "000034",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000035_9": {
+    "code": "000035",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000036_9": {
+    "code": "000036",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000037_9": {
+    "code": "000037",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000039_9": {
+    "code": "000039",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000042_9": {
+    "code": "000042",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000045_9": {
+    "code": "000045",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000048_9": {
+    "code": "000048",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000049_9": {
+    "code": "000049",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000050_9": {
+    "code": "000050",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000056_9": {
+    "code": "000056",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000058_9": {
+    "code": "000058",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000059_9": {
+    "code": "000059",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000060_9": {
+    "code": "000060",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000061_9": {
+    "code": "000061",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000062_9": {
+    "code": "000062",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000063_9": {
+    "code": "000063",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:48:40.947041"
+  },
+  "000065_9": {
+    "code": "000065",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000066_9": {
+    "code": "000066",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:48:42.630993"
+  },
+  "000068_9": {
+    "code": "000068",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000069_9": {
+    "code": "000069",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:48:44.267541"
+  },
+  "000070_9": {
+    "code": "000070",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000078_9": {
+    "code": "000078",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000089_9": {
+    "code": "000089",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000090_9": {
+    "code": "000090",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000096_9": {
+    "code": "000096",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000099_9": {
+    "code": "000099",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000100_9": {
+    "code": "000100",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:48:57.537345"
+  },
+  "000151_9": {
+    "code": "000151",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000153_9": {
+    "code": "000153",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000155_9": {
+    "code": "000155",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000157_9": {
+    "code": "000157",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:49:00.607464"
+  },
+  "000158_9": {
+    "code": "000158",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000159_9": {
+    "code": "000159",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000166_9": {
+    "code": "000166",
+    "frequency": 9,
+    "start": 1897,
+    "total_fetched": 5117,
+    "completed": true,
+    "last_update": "2026-05-10T08:56:36.371821"
+  },
+  "000301_9": {
+    "code": "000301",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000333_9": {
+    "code": "000333",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2189,
+    "completed": true,
+    "last_update": "2026-05-10T08:49:03.702153"
+  },
+  "000338_9": {
+    "code": "000338",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:49:04.730643"
+  },
+  "000400_9": {
+    "code": "000400",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000401_9": {
+    "code": "000401",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000402_9": {
+    "code": "000402",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000403_9": {
+    "code": "000403",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000404_9": {
+    "code": "000404",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000407_9": {
+    "code": "000407",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000408_9": {
+    "code": "000408",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000409_9": {
+    "code": "000409",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000410_9": {
+    "code": "000410",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000411_9": {
+    "code": "000411",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000415_9": {
+    "code": "000415",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000420_9": {
+    "code": "000420",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000421_9": {
+    "code": "000421",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000422_9": {
+    "code": "000422",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000423_9": {
+    "code": "000423",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000425_9": {
+    "code": "000425",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:49:13.260753"
+  },
+  "000521_9": {
+    "code": "000521",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000523_9": {
+    "code": "000523",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000525_9": {
+    "code": "000525",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000528_9": {
+    "code": "000528",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000530_9": {
+    "code": "000530",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:56:40.407657"
+  },
+  "000532_9": {
+    "code": "000532",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:56:41.642486"
+  },
+  "000534_9": {
+    "code": "000534",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000537_9": {
+    "code": "000537",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000539_9": {
+    "code": "000539",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000541_9": {
+    "code": "000541",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000543_9": {
+    "code": "000543",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:56:44.688699"
+  },
+  "000544_9": {
+    "code": "000544",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000546_9": {
+    "code": "000546",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000548_9": {
+    "code": "000548",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000551_9": {
+    "code": "000551",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000553_9": {
+    "code": "000553",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000555_9": {
+    "code": "000555",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000557_9": {
+    "code": "000557",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000559_9": {
+    "code": "000559",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000561_9": {
+    "code": "000561",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000564_9": {
+    "code": "000564",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000566_9": {
+    "code": "000566",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000568_9": {
+    "code": "000568",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:56:51.429492"
+  },
+  "000571_9": {
+    "code": "000571",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000573_9": {
+    "code": "000573",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000576_9": {
+    "code": "000576",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000582_9": {
+    "code": "000582",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:56:54.232365"
+  },
+  "000589_9": {
+    "code": "000589",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000591_9": {
+    "code": "000591",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:56:55.864792"
+  },
+  "000593_9": {
+    "code": "000593",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:56:57.027272"
+  },
+  "000596_9": {
+    "code": "000596",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:56:58.216682"
+  },
+  "000598_9": {
+    "code": "000598",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000599_9": {
+    "code": "000599",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:56:59.992617"
+  },
+  "000600_9": {
+    "code": "000600",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000601_9": {
+    "code": "000601",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000605_9": {
+    "code": "000605",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000608_9": {
+    "code": "000608",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000610_9": {
+    "code": "000610",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 0,
+    "completed": true,
+    "last_update": null
+  },
+  "000612_9": {
+    "code": "000612",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:57:03.751105"
+  },
+  "000615_9": {
+    "code": "000615",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:57:04.720191"
+  },
+  "000619_9": {
+    "code": "000619",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:57:06.073418"
+  },
+  "000623_9": {
+    "code": "000623",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:57:07.085516"
+  },
+  "000625_9": {
+    "code": "000625",
+    "frequency": 9,
+    "start": 0,
+    "total_fetched": 2400,
+    "completed": true,
+    "last_update": "2026-05-10T08:57:08.217149"
+  }
+}
