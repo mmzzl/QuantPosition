@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from database import get_db
 
 
@@ -8,6 +8,8 @@ class NewsSelectionService:
     @staticmethod
     def get_news_stocks(
         period: str = "24h",
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         sort_by: str = "expected_return",
         sort_order: str = "desc",
         page: int = 1,
@@ -15,15 +17,17 @@ class NewsSelectionService:
     ) -> Dict[str, Any]:
         db = get_db()
 
-        now = datetime.now()
-        if period == "7d":
-            cutoff = now - timedelta(days=7)
-        elif period == "30d":
-            cutoff = now - timedelta(days=30)
+        if start_date and end_date:
+            query = {"created_at": {"$gte": start_date, "$lte": end_date + " 23:59"}}
         else:
-            cutoff = now - timedelta(days=1)
-
-        query = {"created_at": {"$gte": cutoff}}
+            now = datetime.now()
+            if period == "7d":
+                cutoff = now - timedelta(days=7)
+            elif period == "30d":
+                cutoff = now - timedelta(days=30)
+            else:
+                cutoff = now - timedelta(days=1)
+            query = {"created_at": {"$gte": cutoff}}
         total = db.news_selection_cache.count_documents(query)
 
         sort_dir = -1 if sort_order == "desc" else 1

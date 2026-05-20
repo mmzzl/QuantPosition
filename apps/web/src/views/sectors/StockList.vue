@@ -131,15 +131,7 @@ async function showKLine(row) {
   klineDialogVisible.value = true
 
   try {
-    const endDate = new Date()
-    const startDate = new Date()
-    startDate.setFullYear(startDate.getFullYear() - 1)
-
-    const res = await getKlineData(row.code, {
-      start_date: startDate.toISOString().split('T')[0],
-      end_date: endDate.toISOString().split('T')[0]
-    })
-
+    const res = await getKlineData(row.code)
     klineData.value = res.data.data || []
   } catch (e) {
     ElMessage.error('获取K线数据失败')

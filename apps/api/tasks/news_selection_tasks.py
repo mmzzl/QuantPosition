@@ -1,4 +1,5 @@
 import re
+import copy
 from datetime import datetime, timedelta
 from celery_config import celery_app
 from database import get_db
@@ -58,7 +59,7 @@ def run_news_selection(self):
         lookback = now - timedelta(days=60)
         klines_raw = list(db.stock_kline.find({
             "code": {"$in": stock_codes},
-            "frequency": 0,
+            "frequency": 9,
             "date": {
                 "$gte": lookback.strftime("%Y-%m-%d"),
                 "$lte": now.strftime("%Y-%m-%d") + " 23:59"
@@ -198,10 +199,10 @@ def run_news_selection(self):
 
         final_results = list(deduped.values())
 
-        # 7. 缓存到 MongoDB（先清旧数据）
+        # 7. 缓存到 MongoDB（先清旧数据，深拷贝避免 insert_many 注入 ObjectId）
         cache_collection.delete_many({})
         if final_results:
-            cache_collection.insert_many(final_results)
+            cache_collection.insert_many(copy.deepcopy(final_results))
 
         self.update_state(state='PROGRESS', meta={
             'current': len(stock_codes), 'total': len(stock_codes),

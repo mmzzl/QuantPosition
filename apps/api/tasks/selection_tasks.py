@@ -33,7 +33,7 @@ def run_dual_ma_selection(
                 stock_name_map[pure] = s.get("stock_name", "")
 
         # 获取所有股票代码
-        all_codes = kline_collection.distinct("code", {"frequency": 0})
+        all_codes = kline_collection.distinct("code", {"frequency": 9})
         total_codes = len(all_codes)
         
         self.update_state(state='PROGRESS', meta={
@@ -56,7 +56,7 @@ def run_dual_ma_selection(
             # 获取该股票的K线数据
             klines = list(kline_collection.find({
                 "code": code,
-                "frequency": 0,
+                "frequency": 9,
                 "date": {"$gte": start_str, "$lte": end_str + " 23:59"}
             }).sort("date", 1))
             

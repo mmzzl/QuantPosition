@@ -172,7 +172,7 @@ def run_rules_for_holdings():
 
     klines_raw = list(db.stock_kline.find({
         "code": {"$in": all_codes},
-        "frequency": 0,
+        "frequency": 9,
         "date": {"$gte": start_str, "$lte": end_str}
     }).sort("date", 1))
 

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 from app.core.auth import AuthenticatedUser, get_current_user
 from services.sector_service import SectorService
+from tasks.kline_tasks import update_kline_data
 
 router = APIRouter(prefix="/sectors", tags=["板块热力图"])
 
@@ -56,14 +57,26 @@ async def get_sector_stocks(
         )
 
 
+@router.post("/refresh-kline")
+async def refresh_kline(
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """触发 K 线数据更新（异步 Celery 任务）"""
+    try:
+        task = update_kline_data.delay()
+        return {"task_id": task.id, "message": "K 线更新任务已提交"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"提交任务失败: {str(e)}")
+
+
 @router.get("/kline/{code}")
 async def get_kline_data(
     code: str,
-    start_date: str = Query(...),
-    end_date: str = Query(...),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
-    """获取股票K线数据"""
+    """获取股票K线数据，不传日期则自动取最近1年"""
     try:
         result = SectorService.get_kline_data(code, start_date, end_date)
         return result

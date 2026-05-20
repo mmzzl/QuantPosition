@@ -97,43 +97,43 @@ class CronTask(ScheduleTask):
                     return None
             elif name == "month":
                 try:
-                    month = string.atoi(value)
+                    month = int(value)
                 except Exception as e:
                     self.error("month format is not right : %s" % (value))
                     return None
             elif name == "day":
                 try:
-                    day = string.atoi(value)
+                    day = int(value)
                 except Exception as e:
                     self.error("day format is not right : %s" % (value))
                     return None
             elif name == "hour":
                 try:
-                    hour = string.atoi(value)
+                    hour = int(value)
                 except Exception as e:
                     self.error("hour format is not right : %s" % (value))
                     return None
             elif name == "minute":
                 try:
-                    minute = string.atoi(value)
+                    minute = int(value)
                 except Exception as e:
                     self.error("minute format is not right : %s" % (value))
                     return None
             elif name == "second":
                 try:
-                    second = string.atoi(value)
+                    second = int(value)
                 except Exception as e:
                     self.error("second format is not right : %s" % (value))
                     return None
             elif name == "week":
                 try:
-                    week = string.atoi(value)
+                    week = int(value)
                 except Exception as e:
                     self.error("week format is not right : %s" % (value))
                     return None
             elif name == "day_of_week":
                 try:
-                    day_of_week = string.atoi(value)
+                    day_of_week = int(value)
                 except Exception as e:
                     self.error(
                         "day_of_week format is not right : %s" % (value))

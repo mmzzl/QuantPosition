@@ -11,7 +11,7 @@ class SectorService:
         """获取板块热力图数据"""
         db = get_db()
         kline_collection = db.stock_kline
-        sector_collection = db.sector_stocks
+        bk_collection = db.bk_stocks
 
         # 计算日期范围
         if start_date and end_date:
@@ -28,24 +28,24 @@ class SectorService:
             start_str = start_dt.strftime("%Y-%m-%d")
             end_str = end_dt.strftime("%Y-%m-%d")
 
-        # 获取所有板块及其股票
-        all_sectors = list(sector_collection.find({}, {"sector_name": 1, "sector_code": 1, "stock_code": 1}))
-        
+        # 获取所有板块及其股票（使用 bk_stocks 概念板块分类）
+        all_bk = list(bk_collection.find({}, {"bk_name": 1, "bk_code": 1, "stock_code": 1}))
+
         # 构建板块->股票代码映射
         sector_map = {}
         all_stock_codes = set()
-        for item in all_sectors:
-            sector_name = item["sector_name"]
+        for item in all_bk:
+            sector_name = item["bk_name"]
             if sector_name not in sector_map:
-                sector_map[sector_name] = {"sector_code": item.get("sector_code", ""), "stocks": []}
-            pure_code = item["stock_code"].split(".")[-1] if "." in item["stock_code"] else item["stock_code"]
+                sector_map[sector_name] = {"sector_code": item.get("bk_code", ""), "stocks": []}
+            pure_code = item["stock_code"].strip()
             sector_map[sector_name]["stocks"].append(pure_code)
             all_stock_codes.add(pure_code)
 
         # 批量查询所有股票的K线数据
         klines = list(kline_collection.find({
             "code": {"$in": list(all_stock_codes)},
-            "frequency": 0,
+            "frequency": 9,
             "date": {"$gte": start_str, "$lte": end_str + " 23:59"}
         }).sort("date", 1))
 
@@ -119,23 +119,20 @@ class SectorService:
     def get_sector_stocks(sector_name: str, period: str = "24h", start_date: str = None, end_date: str = None, sort_by: str = "change_pct", sort_order: str = "desc", page: int = 1, page_size: int = 50) -> Dict[str, Any]:
         """获取指定板块的股票列表"""
         db = get_db()
-        sector_collection = db.sector_stocks
+        bk_collection = db.bk_stocks
         kline_collection = db.stock_kline
 
-        # 获取板块内所有股票
-        stocks = list(sector_collection.find({"sector_name": sector_name}))
+        # 获取板块内所有股票（bk_stocks 中 bk_name 为板块名）
+        stocks = list(bk_collection.find({"bk_name": sector_name}))
         if not stocks:
             raise ValueError(f"板块不存在: {sector_name}")
 
-        sector_code = stocks[0].get("sector_code", "")
-        # 提取纯数字代码
+        sector_code = stocks[0].get("bk_code", "")
+        # 提取纯代码
         stock_codes = []
-        code_map = {}  # pure_code -> original_code
         for s in stocks:
-            code = s["stock_code"]
-            pure_code = code.split(".")[-1] if "." in code else code
+            pure_code = s["stock_code"].strip()
             stock_codes.append(pure_code)
-            code_map[pure_code] = code
 
         # 计算日期范围
         if start_date and end_date:
@@ -155,7 +152,7 @@ class SectorService:
         # 查询时间段内K线数据
         klines = list(kline_collection.find({
             "code": {"$in": stock_codes},
-            "frequency": 0,
+            "frequency": 9,
             "date": {"$gte": start_str, "$lte": end_str + " 23:59"}
         }).sort("date", 1))
 
@@ -223,26 +220,44 @@ class SectorService:
         }
 
     @staticmethod
-    def get_kline_data(code: str, start_date: str, end_date: str) -> Dict[str, Any]:
-        """获取股票K线数据"""
+    def get_kline_data(code: str, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
+        """获取股票K线数据，不传日期则自动取最近1年"""
         db = get_db()
         kline_collection = db.stock_kline
-        sector_collection = db.sector_stocks
 
         # 处理代码格式
         pure_code = code.split(".")[-1] if "." in code else code
 
-        # 获取股票名称
-        stock = sector_collection.find_one({"stock_code": {"$regex": f"{pure_code}$"}})
+        # 获取股票名称（bk_stocks 或 sector_stocks）
+        stock = db.bk_stocks.find_one({"stock_code": pure_code})
+        if not stock:
+            stock = db.sector_stocks.find_one({"stock_code": {"$regex": f"{pure_code}$"}})
         stock_name = stock.get("stock_name", "") if stock else ""
 
-        # 查询K线数据 (date格式: "2026-05-11 15:00")
-        start_str = start_date
-        end_str = end_date + " 23:59"
+        # 不传日期时，以该股最新一条K线日期为终点向前取1年
+        if not start_date or not end_date:
+            latest = kline_collection.find_one(
+                {"code": pure_code, "frequency": 9},
+                sort=[("date", -1)]
+            )
+            if latest:
+                raw = latest["date"]
+                if isinstance(raw, datetime):
+                    end_dt = raw
+                else:
+                    end_dt = datetime.strptime(str(raw).split(" ")[0], "%Y-%m-%d")
+            else:
+                end_dt = datetime.now()
+            start_dt = end_dt - timedelta(days=365)
+            start_str = start_dt.strftime("%Y-%m-%d")
+            end_str = end_dt.strftime("%Y-%m-%d") + " 23:59"
+        else:
+            start_str = start_date
+            end_str = end_date + " 23:59"
 
         klines = list(kline_collection.find({
             "code": pure_code,
-            "frequency": 0,
+            "frequency": 9,
             "date": {"$gte": start_str, "$lte": end_str}
         }).sort("date", 1))
 

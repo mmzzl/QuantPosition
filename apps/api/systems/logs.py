@@ -19,7 +19,7 @@ except Exception:
 
 class Log(object):
     """
-    日志管理类, 支持输出日志到控制台 \ 文件 \ syslog
+    日志管理类, 支持输出日志到控制台
     """
 
     TYPE_SYS = 'sys'  # 将日志发送到syslog
@@ -37,7 +37,7 @@ class Log(object):
         初始化平台日志系统
         :param log_name: 日志存放名称
         :param level: 日志打印级别
-        :param log_type: 日志打印到哪里: 控制台(默认) \ syslog(推荐) \ 文件
+        :param log_type: 日志打印到哪里: 控制台(默认) 
         """
         self.format = log_format if log_format else self.FORMAT_LOG
         if self.TYPE_SYS == log_type:
@@ -127,28 +127,29 @@ class Log(object):
         :param mode_name: 模块名
         :return:
         """
-        try:
-            if not os.path.exists(self.PYTHON_LOG_CFG):
-                return
+        pass
+        # try:
+        #     if not os.path.exists(self.PYTHON_LOG_CFG):
+        #         return
 
-            conf = configparser.ConfigParser()
-            conf.read(self.PYTHON_LOG_CFG)
-            # 允许日志输出
-            if str(conf.get("setting", "enable")) == "1":
-                return
+        #     conf = configparser.ConfigParser()
+        #     conf.read(self.PYTHON_LOG_CFG)
+        #     # 允许日志输出
+        #     if str(conf.get("setting", "enable")) == "1":
+        #         return
 
-            # 黑名单过滤
-            cnt = conf.getint("blacklist", "cnt")
-            if cnt is not 0:
-                for i in range(0, cnt):
-                    key_str = "value_%s" % str(i)
-                    blacklist = conf.get("blacklist", key_str)
-                    if blacklist in mode_name:
-                        logging.disable(logging.CRITICAL)
-                        return
+        #     # 黑名单过滤
+        #     cnt = conf.getint("blacklist", "cnt")
+        #     if cnt != 0:
+        #         for i in range(0, cnt):
+        #             key_str = "value_%s" % str(i)
+        #             blacklist = conf.get("blacklist", key_str)
+        #             if blacklist in mode_name:
+        #                 logging.disable(logging.CRITICAL)
+        #                 return
 
-        except Exception as e:
-            pass
+        # except Exception as e:
+        #     pass
 
 
 class SysLogLibHandler(logging.Handler):
