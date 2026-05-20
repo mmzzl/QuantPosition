@@ -1,0 +1,17 @@
+mongodb:
+  host: "127.0.0.1"
+  port: 27017
+  database: "eastmoney_news"
+  collection: "news"
+spider:
+  progress_file: "spider_progress.json"
+
+app:
+  name: "News API"
+  version: "1.0.0"
+  description: "A FastAPI application for news data management"
+
+jwt:
+  secret: "your-secret-key-change-in-production-2026"
+  algorithm: "HS256"
+  access_token_expire_minutes: 30
