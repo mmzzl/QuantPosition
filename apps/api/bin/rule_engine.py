@@ -91,6 +91,12 @@ class StockRuleEngine:
         if position is None:
             position = {}
 
+        today = datetime.now().date()
+        today_num = today.toordinal()
+
+        buy_date = position.get("buy_date")
+        buy_date_num = buy_date.toordinal() if isinstance(buy_date, datetime.date) else today_num
+
         ctx = {
             "price": stock_data.get("close", 0),
             "vol": stock_data.get("volume", 0),
@@ -103,8 +109,8 @@ class StockRuleEngine:
             "open": stock_data.get("open", 0),
             "has_pos": position.get("has_pos", False),
             "cost": position.get("cost", 0),
-            "buy_date": position.get("buy_date", ""),
-            "today": datetime.now().strftime("%Y-%m-%d"),
+            "buy_date": buy_date_num,
+            "today": today_num,
         }
         return ctx
 
@@ -212,18 +218,18 @@ def run_rules_for_holdings():
             position = {
                 "has_pos": True,
                 "cost": h.get("average_cost", 0),
-                "buy_date": h.get("created_at", "").strftime("%Y-%m-%d") if isinstance(h.get("created_at"), datetime) else "",
+                "buy_date": h["created_at"].date() if isinstance(h.get("created_at"), datetime) else None,
             }
             user_id = h.get("user_id", "?")
         else:
-            position = {"has_pos": False, "cost": 0, "buy_date": ""}
+            position = {"has_pos": False, "cost": 0, "buy_date": None}
             user_id = buy_candidates.get(code, {}).get("user_id", "system")
 
         ctx = engine.build_context(stock_data, position)
         risk, sell_sc, buy_sc, triggered = engine.run(ctx)
 
         if triggered:
-            today_str = ctx["today"]
+            today_str = datetime.now().strftime("%Y-%m-%d")
             rule_ids = sorted(r["rule_id"] for r in triggered)
             dedup_key = f"{code}|{today_str}|{rule_ids}"
 
