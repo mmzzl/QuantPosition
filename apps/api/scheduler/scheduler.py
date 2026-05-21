@@ -303,17 +303,29 @@ class SchedulerManager:
         return self._scheduler
 
 
+def print_scheduled_jobs(mgr):
+    sched = mgr.get_scheduler()
+    jobs = sched.get_jobs()
+    print(f"Scheduler has {len(jobs)} job(s):")
+    for j in jobs:
+        print(f"  id={j.id}, trigger={j.trigger}, next_run={j.next_run_time}")
+
+
 def run_scheduler():
     scheduler_mgr = SchedulerManager()
 
     tasks = schedule_tasks_load(is_single_this=False)
-    print(tasks)
+    print(f"Loaded {len(tasks)} tasks from config:")
     for i, task in enumerate(tasks):
+        print(f"  [{i}] script={task.script}, isok={task.isok}, trigger={'yes' if task.trigger else 'NO'}, msg='{task.message}'")
         if task.isok and task.trigger:
             scheduler_mgr.add_task(task, f"task_{i}")
-            print(f"Added task {i}: {task.script or 'unnamed'}")
+            print(f"    -> Added")
+        else:
+            print(f"    -> Skipped")
 
     scheduler_mgr.start()
+    print_scheduled_jobs(scheduler_mgr)
     return scheduler_mgr
 
 

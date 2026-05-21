@@ -106,6 +106,11 @@ def run_news_selection(self):
             highs = [k["high"] for k in klines]
             lows = [k["low"] for k in klines]
 
+            # 排除ST股票
+            name = r.get("stock_name", "")
+            if name.startswith("ST") or name.startswith("*ST"):
+                continue
+
             current_price = closes[-1]
             if current_price <= 0:
                 continue

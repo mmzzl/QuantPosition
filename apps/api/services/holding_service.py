@@ -4,6 +4,26 @@ from typing import Optional, List, Dict, Any
 from database import get_db
 from models.holding import HoldingCreate, HoldingUpdate, SellRequest, ExitRuleRequest
 from utils.stock_api import get_stock_price, get_stock_name
+from config.config import settings
+
+
+def _is_shanghai(code: str) -> bool:
+    return code.startswith("60") or code.startswith("688")
+
+
+def calc_buy_fees(price: float, quantity: int, code: str) -> Dict[str, float]:
+    amount = price * quantity
+    commission = max(amount * settings.commission_rate, settings.min_commission)
+    transfer_fee = amount * settings.transfer_rate if _is_shanghai(code) else 0
+    return {"commission": round(commission, 2), "transfer_fee": round(transfer_fee, 2), "total": round(commission + transfer_fee, 2)}
+
+
+def calc_sell_fees(price: float, quantity: int, code: str) -> Dict[str, float]:
+    amount = price * quantity
+    commission = max(amount * settings.commission_rate, settings.min_commission)
+    transfer_fee = amount * settings.transfer_rate if _is_shanghai(code) else 0
+    stamp_duty = amount * settings.stamp_duty_rate
+    return {"commission": round(commission, 2), "transfer_fee": round(transfer_fee, 2), "stamp_duty": round(stamp_duty, 2), "total": round(commission + transfer_fee + stamp_duty, 2)}
 
 
 class HoldingService:
@@ -11,24 +31,26 @@ class HoldingService:
 
     @staticmethod
     def create_holding(user_id: str, holding_data: HoldingCreate) -> Dict[str, Any]:
-        """创建持仓"""
+        """买入持仓，包含买入费用（佣金+过户费）"""
         db = get_db()
         holdings_collection = db.holdings
 
-        # 检查是否已存在该股票的持仓
+        buy_amount = holding_data.quantity * holding_data.average_cost
+        fees = calc_buy_fees(holding_data.average_cost, holding_data.quantity, holding_data.code)
+        buy_total = buy_amount + fees["total"]
+
+        name = holding_data.name or get_stock_name(holding_data.code)
+
         existing = holdings_collection.find_one({
             "user_id": user_id,
             "code": holding_data.code
         })
 
         if existing:
-            # 累加数量，重新计算平均成本
+            old_total_cost = existing.get("total_cost", existing["quantity"] * existing["average_cost"])
             new_quantity = existing["quantity"] + holding_data.quantity
-            new_avg_cost = (
-                (existing["quantity"] * existing["average_cost"] +
-                 holding_data.quantity * holding_data.average_cost)
-                / new_quantity
-            )
+            new_total_cost = round(old_total_cost + buy_total, 2)
+            new_avg_cost = round(new_total_cost / new_quantity, 4)
 
             holdings_collection.update_one(
                 {"_id": existing["_id"]},
@@ -36,84 +58,66 @@ class HoldingService:
                     "$set": {
                         "quantity": new_quantity,
                         "average_cost": new_avg_cost,
+                        "total_cost": new_total_cost,
                         "updated_at": datetime.now()
                     }
                 }
             )
 
-            # 记录交易历史
-            transactions_collection = db.transactions
-            transactions_collection.insert_one({
-                "user_id": user_id,
-                "code": holding_data.code,
-                "type": "buy",
-                "quantity": holding_data.quantity,
-                "price": holding_data.average_cost,
-                "total": holding_data.quantity * holding_data.average_cost,
-                "created_at": datetime.now()
-            })
+            holding_id = str(existing["_id"])
+            ret_quantity = new_quantity
+            ret_avg_cost = round(new_total_cost / new_quantity, 2)
+        else:
+            now = datetime.now()
+            new_total_cost = round(buy_total, 2)
+            new_quantity = holding_data.quantity
+            new_avg_cost = round(buy_total / holding_data.quantity, 4)
 
-            # 获取股票名称
-            name = holding_data.name or get_stock_name(holding_data.code)
-
-            return {
-                "id": str(existing["_id"]),
+            result = holdings_collection.insert_one({
                 "user_id": user_id,
                 "code": holding_data.code,
                 "name": name,
                 "quantity": new_quantity,
-                "average_cost": round(new_avg_cost, 2)
-            }
+                "average_cost": new_avg_cost,
+                "total_cost": new_total_cost,
+                "highest_price": holding_data.average_cost,
+                "exit_rule": None,
+                "tier_triggered": [False, False, False, False],
+                "created_at": now,
+                "updated_at": now
+            })
 
-        # 获取股票名称
-        name = holding_data.name or get_stock_name(holding_data.code)
+            holding_id = str(result.inserted_id)
+            ret_quantity = new_quantity
+            ret_avg_cost = round(buy_total / holding_data.quantity, 2)
 
-        # 创建新持仓
-        now = datetime.now()
-        holding_doc = {
-            "user_id": user_id,
-            "code": holding_data.code,
-            "name": name,
-            "quantity": holding_data.quantity,
-            "average_cost": holding_data.average_cost,
-            "highest_price": holding_data.average_cost,
-            "exit_rule": None,
-            "tier_triggered": [False, False, False, False],
-            "created_at": now,
-            "updated_at": now
-        }
-
-        result = holdings_collection.insert_one(holding_doc)
-
-        # 记录交易历史
-        transactions_collection = db.transactions
-        transactions_collection.insert_one({
+        # 记录买入交易（含费用）
+        db.transactions.insert_one({
             "user_id": user_id,
             "code": holding_data.code,
             "type": "buy",
             "quantity": holding_data.quantity,
             "price": holding_data.average_cost,
-            "total": holding_data.quantity * holding_data.average_cost,
+            "total": buy_amount,
+            "fees": fees["total"],
             "created_at": datetime.now()
         })
 
         return {
-            "id": str(result.inserted_id),
+            "id": holding_id,
             "user_id": user_id,
             "code": holding_data.code,
             "name": name,
-            "quantity": holding_data.quantity,
-            "average_cost": holding_data.average_cost
+            "quantity": ret_quantity,
+            "average_cost": ret_avg_cost
         }
 
     @staticmethod
     def sell_holding(user_id: str, code: str, sell_data: SellRequest) -> Dict[str, Any]:
-        """卖出持仓"""
+        """卖出持仓，摊薄成本，记录已实现盈亏"""
         db = get_db()
         holdings_collection = db.holdings
-        transactions_collection = db.transactions
 
-        # 获取持仓
         holding = holdings_collection.find_one({
             "user_id": user_id,
             "code": code
@@ -125,58 +129,61 @@ class HoldingService:
         if holding["quantity"] < sell_data.quantity:
             raise ValueError(f"持仓数量不足，当前持有 {holding['quantity']} 股")
 
-        # 计算卖出总额
-        total = sell_data.quantity * sell_data.price
+        sell_amount = sell_data.quantity * sell_data.price
+        fees = calc_sell_fees(sell_data.price, sell_data.quantity, code)
+        sell_net = sell_amount - fees["total"]
 
-        # 记录交易
+        old_total_cost = holding.get("total_cost", holding["quantity"] * holding["average_cost"])
+        old_avg_cost = holding["average_cost"]
+        cost_of_sold = sell_data.quantity * old_avg_cost
+        realized_pnl = round(sell_net - cost_of_sold, 2)
+
+        new_quantity = holding["quantity"] - sell_data.quantity
         now = datetime.now()
-        transaction_doc = {
+
+        # 记录卖出交易（含费用、已实现盈亏）
+        db.transactions.insert_one({
             "user_id": user_id,
             "code": code,
             "type": "sell",
             "quantity": sell_data.quantity,
             "price": sell_data.price,
-            "total": total,
+            "total": sell_amount,
+            "fees": fees["total"],
+            "realized_pnl": realized_pnl,
             "created_at": now
-        }
-        transactions_collection.insert_one(transaction_doc)
-
-        # 更新持仓数量
-        new_quantity = holding["quantity"] - sell_data.quantity
+        })
 
         if new_quantity == 0:
-            # 删除持仓
             holdings_collection.delete_one({"_id": holding["_id"]})
-            return {
-                "id": str(holding["_id"]),
-                "code": code,
-                "type": "sell",
-                "quantity": sell_data.quantity,
-                "price": sell_data.price,
-                "total": total,
-                "remaining_quantity": 0
-            }
         else:
-            # 更新持仓
+            # 摊薄成本：剩余总成本 = 原总成本 - 卖出金额（不含费用）
+            remaining_cost = old_total_cost - sell_amount
+            new_avg_cost = remaining_cost / new_quantity if remaining_cost > 0 else 0
+
             holdings_collection.update_one(
                 {"_id": holding["_id"]},
                 {
                     "$set": {
                         "quantity": new_quantity,
+                        "average_cost": round(new_avg_cost, 4),
+                        "total_cost": round(max(remaining_cost, 0), 2),
                         "updated_at": now
                     }
                 }
             )
 
-            return {
-                "id": str(holding["_id"]),
-                "code": code,
-                "type": "sell",
-                "quantity": sell_data.quantity,
-                "price": sell_data.price,
-                "total": total,
-                "remaining_quantity": new_quantity
-            }
+        return {
+            "id": str(holding["_id"]),
+            "code": code,
+            "type": "sell",
+            "quantity": sell_data.quantity,
+            "price": sell_data.price,
+            "total": sell_amount,
+            "fees": fees["total"],
+            "realized_pnl": realized_pnl,
+            "remaining_quantity": new_quantity
+        }
 
     @staticmethod
     def delete_holding(user_id: str, code: str) -> bool:

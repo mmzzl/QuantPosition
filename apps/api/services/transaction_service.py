@@ -94,27 +94,35 @@ class TransactionService:
 
     @staticmethod
     def get_realized_pnl(user_id: str) -> float:
-        """计算已实现盈亏"""
+        """计算已实现盈亏（累加每笔卖出记录的 realized_pnl）"""
         db = get_db()
         transactions_collection = db.transactions
 
-        # 获取所有卖出交易
-        sell_transactions = list(transactions_collection.find({
+        sells = list(transactions_collection.find({
             "user_id": user_id,
             "type": "sell"
         }))
 
-        # 获取所有买入交易
-        buy_transactions = list(transactions_collection.find({
-            "user_id": user_id,
-            "type": "buy"
-        }))
+        total = 0
+        for s in sells:
+            if "realized_pnl" in s:
+                total += s["realized_pnl"]
+            else:
+                # 旧数据兼容：按该股买入均价估算
+                code = s["code"]
+                buys = list(transactions_collection.find({
+                    "user_id": user_id,
+                    "code": code,
+                    "type": "buy"
+                }))
+                if buys:
+                    total_buy_qty = sum(b["quantity"] for b in buys)
+                    total_buy_cost = sum(b["total"] for b in buys)
+                    avg_cost = total_buy_cost / total_buy_qty if total_buy_qty > 0 else 0
+                    cost_of_sold = s["quantity"] * avg_cost
+                    total += s["total"] - cost_of_sold
 
-        total_sell = sum(t["total"] for t in sell_transactions)
-        total_buy = sum(t["total"] for t in buy_transactions)
-
-        # 计算已实现盈亏 = 卖出总额 - 买入总额
-        return round(total_sell - total_buy, 2)
+        return round(total, 2)
 
     @staticmethod
     def get_all_realized_pnl() -> Dict:
