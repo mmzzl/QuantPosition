@@ -11,3 +11,6 @@ dist
 logs
 logs/*
 *.log
+.pid
+apps/api/logs/*
+apps/api/var/run/*
