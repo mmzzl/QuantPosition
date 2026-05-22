@@ -218,6 +218,12 @@ def run_rules_for_holdings():
             "open": klines[-1].get("open", 0),
         }
 
+        stock_data["name"] = (
+            holding_map[code].get("name", "")
+            if code in holding_map
+            else buy_candidates.get(code, {}).get("name", "")
+        )
+
         if code in holding_map:
             h = holding_map[code]
             position = {
