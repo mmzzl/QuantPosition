@@ -8,7 +8,7 @@ import base64
 import time
 import logging
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse, quote
 from systems.logs import Log
@@ -95,7 +95,7 @@ class StockRuleEngine:
         today_num = today.toordinal()
 
         buy_date = position.get("buy_date")
-        buy_date_num = buy_date.toordinal() if isinstance(buy_date, datetime.date) else today_num
+        buy_date_num = buy_date.toordinal() if isinstance(buy_date, date) else today_num
 
         ctx = {
             "price": stock_data.get("close", 0),
