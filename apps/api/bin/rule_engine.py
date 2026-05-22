@@ -4,6 +4,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import hashlib
+import hmac
 import base64
 import time
 import logging
@@ -31,13 +32,13 @@ def send_dingtalk_message(title: str, content: str):
 
         if not webhook:
             logging.warning("钉钉 webhook 未配置")
-            return
+            return False
 
         timestamp = str(round(time.time() * 1000))
         if secret:
             sign_str = f"{timestamp}\n{secret}"
             sign = base64.b64encode(
-                hashlib.sha256(sign_str.encode("utf-8")).digest()
+                hmac.new(secret.encode("utf-8"), sign_str.encode("utf-8"), hashlib.sha256).digest()
             ).decode("utf-8")
             webhook += f"&timestamp={timestamp}&sign={quote(sign)}"
 
@@ -49,9 +50,12 @@ def send_dingtalk_message(title: str, content: str):
             }
         }
         resp = requests.post(webhook, json=payload, timeout=5)
-        logging.info(f"钉钉推送结果: {resp.json()}")
+        result = resp.json()
+        logging.info(f"钉钉推送结果: {result}")
+        return result.get("errcode") == 0
     except Exception as e:
         logging.error(f"钉钉推送失败: {e}")
+        return False
 
 
 class StockRuleEngine:
@@ -188,6 +192,7 @@ def run_rules_for_holdings():
 
     engine = StockRuleEngine(rules)
     triggered_messages = []
+    pending_alerts = []
 
     # 6. 构建持仓代码→持仓信息映射
     holding_map = {h["code"]: h for h in holdings}
@@ -250,8 +255,8 @@ def run_rules_for_holdings():
             if risk:
                 msg = f"🚨 **风控触发**\n" + msg
 
-            # 写入告警日志
-            db.alert_log.insert_one({
+            triggered_messages.append(msg)
+            pending_alerts.append({
                 "dedup_key": dedup_key,
                 "code": code,
                 "date": today_str,
@@ -265,14 +270,17 @@ def run_rules_for_holdings():
                 "message": msg,
                 "created_at": datetime.now(),
             })
-            triggered_messages.append(msg)
 
-    # 8. 推送钉钉
-    if triggered_messages:
-        title = f"交易规则触发通知 ({len(triggered_messages)} 条)"
+    # 8. 推送钉钉，成功后才写告警日志
+    if pending_alerts:
+        title = f"交易规则触发通知 ({len(pending_alerts)} 条)"
         content = "\n---\n".join(triggered_messages)
-        send_dingtalk_message(title, content)
-        logging.info(f"推送 {len(triggered_messages)} 条规则触发消息")
+        if send_dingtalk_message(title, content):
+            for doc in pending_alerts:
+                db.alert_log.insert_one(doc)
+            logging.info(f"推送成功，记录 {len(pending_alerts)} 条告警")
+        else:
+            logging.warning(f"推送失败，未记录 {len(pending_alerts)} 条告警，下次重试")
     else:
         logging.info("本轮未触发任何规则")
 
