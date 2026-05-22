@@ -6,6 +6,7 @@ import traceback
 import requests
 import pandas as pd
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -132,64 +133,69 @@ class StockKlineScraper:
         if not records:
             return
         try:
-            operations = []
-            for record in records:
-                operations.append(
-                    UpdateOne(
-                        {
-                            "code": record["code"],
-                            "date": record["date"],
-                            "frequency": record["frequency"],
-                        },
-                        {"$set": record},
-                        upsert=True,
-                    )
+            operations = [
+                UpdateOne(
+                    {"code": r["code"], "date": r["date"], "frequency": r["frequency"]},
+                    {"$set": r},
+                    upsert=True,
                 )
+                for r in records
+            ]
             result = self.storage.bulk_write(operations, ordered=False)
             saved_count = result.upserted_count + result.modified_count
-            logging.debug(
-                f"Saved {saved_count}/{len(records)} kline records for {records[0]['code']} "
-                f"(upserted={result.upserted_count}, modified={result.modified_count})"
-            )
+            if saved_count:
+                logging.debug(f"Saved {saved_count}/{len(records)} kline records")
         except Exception as e:
-            logging.error(f"Failed to save klines: {e}")
+            logging.error(f"Failed to save {len(records)} klines: {e}")
 
     def fetch_daily_klines(self, codes: List[str] = None):
         if codes is None:
             codes = self._get_all_stock_codes()
 
-        success = 0
-        skipped = 0
-        failed = 0
+        total = len(codes)
+        workers = 10
+        results = {"success": 0, "skipped": 0, "failed": 0}
 
-        for i, code in enumerate(codes):
-            try:
-                pure_code = code.split(".")[-1]
-                records = self._fetch_kline(pure_code)
-                if records is None:
-                    failed += 1
-                elif not records:
-                    skipped += 1
-                else:
-                    self.save_klines(records)
-                    success += 1
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(self._fetch_kline, code.split(".")[-1]): code
+                for code in codes
+            }
 
-                if (i + 1) % 50 == 0:
+            pending = []
+            for i, future in enumerate(as_completed(futures)):
+                code = futures[future]
+                try:
+                    records = future.result()
+                    if records is None:
+                        results["failed"] += 1
+                    elif not records:
+                        results["skipped"] += 1
+                    else:
+                        pending.extend(records)
+                        results["success"] += 1
+                except Exception as e:
+                    logging.error(f"Error processing {code}: {e}")
+                    results["failed"] += 1
+
+                if len(pending) >= 2000:
+                    self.save_klines(pending)
+                    pending = []
+
+                if (i + 1) % 500 == 0:
                     logging.info(
-                        f"Progress: {i + 1}/{len(codes)}, success={success}, skipped={skipped}, failed={failed}"
+                        f"Progress: {i + 1}/{total}, "
+                        f'success={results["success"]}, skipped={results["skipped"]}, failed={results["failed"]}'
                     )
-                time.sleep(0.15)
 
-            except Exception as e:
-                logging.error(f"Error processing {code}: {e}")
-                logging.error(traceback.format_exc())
-                failed += 1
-                continue
+        if pending:
+            self.save_klines(pending)
 
         logging.info(
-            f"Daily kline fetch completed: total={len(codes)}, success={success}, skipped={skipped}, failed={failed}"
+            f"Daily kline fetch completed: total={total}, "
+            f'success={results["success"]}, skipped={results["skipped"]}, failed={results["failed"]}'
         )
-        return {"success": success, "skipped": skipped, "failed": failed}
+        return results
 
 
 if __name__ == "__main__":
