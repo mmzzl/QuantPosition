@@ -20,6 +20,9 @@ from database import get_db
 TENCENT_MAX = 320
 
 
+TODAY_FLAG = " 15:00"
+
+
 def _tencent_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict]]:
     market = "sh" if code.startswith(("6", "5")) else "sz"
     try:
@@ -55,7 +58,7 @@ def _tencent_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict]]:
             continue
         records.append({
             "code": code,
-            "date": date_str,
+            "date": f"{date_str}{TODAY_FLAG}",
             "open": o,
             "high": h,
             "low": l,
@@ -72,6 +75,15 @@ def _tencent_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict]]:
 class StockKlineScraper:
     def __init__(self):
         self.storage = get_db()["stock_kline"]
+
+    @staticmethod
+    def _cutoff_date() -> str:
+        now = datetime.now()
+        if now.hour < 15 or (now.hour == 15 and now.minute == 0):
+            cutoff = now - timedelta(days=1)
+        else:
+            cutoff = now
+        return cutoff.strftime("%Y-%m-%d")
 
     def _get_latest_bar_time(self, code: str, frequency: int) -> Optional[str]:
         try:
@@ -106,11 +118,14 @@ class StockKlineScraper:
         if records is None:
             return None
 
+        cutoff = self._cutoff_date()
+        records = [r for r in records if r["date"][:10] <= cutoff]
+
         latest = self._get_latest_bar_time(code, 9)
         if latest:
             records = [r for r in records if r["date"] > latest]
 
-        logging.debug(f"tencent {code}: {len(records)} new bars")
+        logging.debug(f"tencent {code}: {len(records)} new bars (cutoff={cutoff})")
         return records
 
     def save_klines(self, records: List[Dict[str, Any]]):
