@@ -94,7 +94,7 @@ async def get_permissions(
                 "description": p.get("description"),
                 "menu_path": p.get("menu_path"),
                 "menu_label": p.get("menu_label"),
-                "created_at": p["created_at"]
+                "created_at": p.get("created_at")
             }
             for p in permissions
         ]

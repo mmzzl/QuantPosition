@@ -3,12 +3,13 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import time
 import traceback
+import requests
 import pandas as pd
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from mootdx.quotes import Quotes
 from pymongo import UpdateOne
 
 from systems.logs import Log
@@ -17,18 +18,75 @@ from systems.sys import home
 from database import get_db
 
 
-BATCH_SIZE = 800
+TENCENT_MAX = 320
+
+
+TODAY_FLAG = " 15:00"
+
+
+def _tencent_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict]]:
+    market = "sh" if code.startswith(("6", "5")) else "sz"
+    try:
+        r = requests.get(
+            "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+            params={"param": f"{market}{code},day,,,{count},qfq"},
+            timeout=10,
+        )
+        d = r.json()
+    except Exception as e:
+        logging.error(f"tencent HTTP error for {code}: {e}")
+        return None
+
+    if not (d.get("data")):
+        return []
+
+    data = list(d["data"].values())[0]
+    bars = data.get("qfqday") or data.get("day")
+    if not bars or not isinstance(bars, list):
+        return []
+
+    records = []
+    for bar in bars:
+        if not isinstance(bar, (list, tuple)) or len(bar) < 6:
+            continue
+        date_str = str(bar[0]).strip()
+        if not date_str:
+            continue
+        try:
+            o, c, h, l = float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4])
+            v = int(float(bar[5])) if bar[5] else 0
+        except (ValueError, TypeError):
+            continue
+        records.append({
+            "code": code,
+            "date": f"{date_str}{TODAY_FLAG}",
+            "open": o,
+            "high": h,
+            "low": l,
+            "close": c,
+            "volume": v,
+            "amount": 0.0,
+            "frequency": 9,
+            "adjust": "qfq",
+            "crawl_time": datetime.now().isoformat(),
+        })
+    return records
 
 
 class StockKlineScraper:
     def __init__(self):
-        self.storage = get_db()['stock_kline']
-        self.client = Quotes.factory(market="std", multithread=True, heartbeat=False)
-        self._qlib_sync_pending: Dict[str, bool] = {}
-        self._qlib_defer_sync = False
+        self.storage = get_db()["stock_kline"]
 
-    def _get_latest_bar_time(self, code: str,frequency: int) -> Optional[str]:
-        """获取某只股票最新一条 K 线的时间戳"""
+    @staticmethod
+    def _cutoff_date() -> str:
+        now = datetime.now()
+        if now.hour < 15 or (now.hour == 15 and now.minute == 0):
+            cutoff = now - timedelta(days=1)
+        else:
+            cutoff = now
+        return cutoff.strftime("%Y-%m-%d")
+
+    def _get_latest_bar_time(self, code: str, frequency: int) -> Optional[str]:
         try:
             doc = self.storage.find_one(
                 {"code": code, "frequency": frequency},
@@ -40,7 +98,6 @@ class StockKlineScraper:
             return None
 
     def _get_all_stock_codes(self) -> List[str]:
-        """从 data/all_stock.csv 加载股票代码"""
         codes = set()
         path = os.path.join(home(), "apps", "api", "data", "all_stock.csv")
         try:
@@ -48,7 +105,6 @@ class StockKlineScraper:
             for _, row in df.iterrows():
                 code = str(row.get("code", "")).strip()
                 if code:
-                    # "sh.000001" -> "000001"
                     pure = code.split(".")[-1]
                     if pure.isdigit():
                         codes.add(pure)
@@ -56,204 +112,99 @@ class StockKlineScraper:
         except Exception as e:
             logging.error(f"Failed to load all_stock.csv: {e}")
             raise
-
         return sorted(list(codes))
 
-    def _fetch_kline(
-        self,
-        code: str,
-        frequency: int = 9,
-        start: int = 0,
-        count: int = BATCH_SIZE,
-        adjust: str = "qfq",
-    ) -> List[Dict[str, Any]]:
-        try:
-            df = self.client.bars(
-                symbol=code,
-                freq=frequency,
-                start=start,
-                offset=count,
-            )
-            if df is None or df.empty:
-                return []
-            
-            if isinstance(df.columns, pd.RangeIndex):
-                df.columns = ["date", "open", "high", "low", "close", "amount", "volume"]
-            else:
-                column_map = {
-                    "datetime": "date",
-                    "open": "open",
-                    "high": "high",
-                    "low": "low",
-                    "close": "close",
-                    "amount": "amount",
-                    "volume": "volume",
-                }
-                available_cols = [c for c in column_map.keys() if c in df.columns]
-                df = df[available_cols].rename(columns=column_map)
+    def _fetch_kline(self, code: str) -> List[Dict[str, Any]]:
+        records = _tencent_kline(code)
+        if records is None:
+            return None
 
-            records = []
-            for _, row in df.iterrows():
-                try:
-                    records.append(
-                        {
-                            "code": code,
-                            "date": str(row["date"]),
-                            "open": float(row["open"]),
-                            "high": float(row["high"]),
-                            "low": float(row["low"]),
-                            "close": float(row["close"]),
-                            "volume": int(row["volume"])
-                            if pd.notna(row["volume"])
-                            else 0,
-                            "amount": float(row["amount"])
-                            if pd.notna(row["amount"])
-                            else 0.0,
-                            "frequency": frequency,
-                            "adjust": adjust,
-                            "crawl_time": datetime.now().isoformat(),
-                        }
-                    )
-                except (ValueError, TypeError, KeyError) as e:
-                    logging.error(f"Parse error for {code}: {e}")
-                    continue
-            if frequency == 0 and len(records) <= 2:
-                logging.debug(f"mootdx returned only {len(records)} bars for {code} freq={frequency}")
-            return records
-        except Exception as e:
-            logging.error(f"Failed to fetch kline for {code}: {e}")
-            return []
+        cutoff = self._cutoff_date()
+        records = [r for r in records if r["date"][:10] <= cutoff]
 
-    def _need_fetch(self, code: str, frequency: int = 9) -> bool:
-        today = "%s 15:00" % datetime.now().strftime("%Y-%m-%d")
-        try:
-            doc = self.storage.find_one(
-                {"code": code, "date": today}
-            )
-            return doc is None
-        except Exception as e:
-            logging.warning(f"Failed to check existence for {code}: {e}")
-            return True
+        latest = self._get_latest_bar_time(code, 9)
+        if latest:
+            records = [r for r in records if r["date"] > latest]
 
-    def _get_fetch_count(self, code: str, frequency: int) -> int:
-        """根据最后同步日期计算需要拉取的K线条数
+        logging.debug(f"tencent {code}: {len(records)} new bars (cutoff={cutoff})")
+        return records
 
-        取MongoDB中该股票最新一根K线的日期，与今天相减，
-        估算缺失交易日天数作为 count（加 buffer 确保覆盖）。
-        首次同步（无数据）返回 BATCH_SIZE。
-        """
-        latest = self._get_latest_bar_time(code, frequency)
-        if not latest:
-            return BATCH_SIZE
-
-        try:
-            last_date = datetime.strptime(latest[:10], "%Y-%m-%d").date()
-            diff = (datetime.now().date() - last_date).days
-            if diff <= 0:
-                return 0  # 已包含今日数据
-            if frequency == 0:
-                # 5分钟线：每个交易日约48根，加buffer
-                return max(int(diff * 60), BATCH_SIZE)
-            # 日线：交易日约占总天数70%，乘2保证覆盖
-            return max(int(diff * 2), 1)
-        except ValueError:
-            return BATCH_SIZE
-
-    def save_klines(self, records: List[Dict[str, Any]], frequency: int = 9):
+    def save_klines(self, records: List[Dict[str, Any]]):
         if not records:
             return
-        
         try:
-            operations = []
-            for record in records:
-                record_frequency = record.get("frequency", frequency)
-                operations.append(
-                    UpdateOne(
-                        {"code": record["code"], "date": record["date"], "frequency": record_frequency},
-                        {"$set": record},
-                        upsert=True,
-                    )
+            operations = [
+                UpdateOne(
+                    {"code": r["code"], "date": r["date"], "frequency": r["frequency"]},
+                    {"$set": r},
+                    upsert=True,
                 )
-
+                for r in records
+            ]
             result = self.storage.bulk_write(operations, ordered=False)
             saved_count = result.upserted_count + result.modified_count
-            logging.debug(
-                f"Saved {saved_count}/{len(records)} kline records for {records[0]['code']} "
-                f"(upserted={result.upserted_count}, modified={result.modified_count})"
-            )
+            if saved_count:
+                logging.debug(f"Saved {saved_count}/{len(records)} kline records")
         except Exception as e:
-            logging.error(f"Failed to save klines: {e}")
-            
+            logging.error(f"Failed to save {len(records)} klines: {e}")
 
-    def fetch_daily_klines(
-        self,
-        codes: List[str] = None,
-        adjust: str = "qfq",
-    ):
-        """增量获取日K线：每只股票只取最新一批数据，不做历史全量拉取
-
-        Parameters
-        ----------
-        codes : List[str], optional
-            股票代码列表，不指定则自动获取
-        adjust : str, default "qfq"
-            复权类型
-        """
+    def fetch_daily_klines(self, codes: List[str] = None):
         if codes is None:
             codes = self._get_all_stock_codes()
 
-        frequency = 9
-        success = 0
-        skipped = 0
-        failed = 0
+        total = len(codes)
+        workers = 10
+        results = {"success": 0, "skipped": 0, "failed": 0}
 
-        for i, code in enumerate(codes):
-            try:
-                pure_code = code.split(".")[-1]
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(self._fetch_kline, code.split(".")[-1]): code
+                for code in codes
+            }
 
-                count = self._get_fetch_count(pure_code, frequency)
-                if count > 0:
-                    records = self._fetch_kline(
-                        pure_code,
-                        frequency=frequency,
-                        start=0,
-                        count=count,
-                        adjust=adjust,
-                    )
-                    if records:
-                        self.save_klines(records, frequency=frequency)
-                        success += 1
+            pending = []
+            for i, future in enumerate(as_completed(futures)):
+                code = futures[future]
+                try:
+                    records = future.result()
+                    if records is None:
+                        results["failed"] += 1
+                    elif not records:
+                        results["skipped"] += 1
                     else:
-                        failed += 1
-                else:
-                    skipped += 1
+                        pending.extend(records)
+                        results["success"] += 1
+                except Exception as e:
+                    logging.error(f"Error processing {code}: {e}")
+                    results["failed"] += 1
 
-                if (i + 1) % 50 == 0:
+                if len(pending) >= 2000:
+                    self.save_klines(pending)
+                    pending = []
+
+                if (i + 1) % 500 == 0:
                     logging.info(
-                        f"Progress: {i + 1}/{len(codes)}, success={success}, skipped={skipped}, failed={failed}"
+                        f"Progress: {i + 1}/{total}, "
+                        f'success={results["success"]}, skipped={results["skipped"]}, failed={results["failed"]}'
                     )
 
-                time.sleep(0.1)
-
-            except Exception as e:
-                logging.error(f"Error processing {code}: {e}")
-                logging.error(traceback.format_exc())
-                failed += 1
-                continue
+        if pending:
+            self.save_klines(pending)
 
         logging.info(
-            f"Daily kline fetch completed: total={len(codes)}, success={success}, skipped={skipped}, failed={failed}"
+            f"Daily kline fetch completed: total={total}, "
+            f'success={results["success"]}, skipped={results["skipped"]}, failed={results["failed"]}'
         )
-        return {"success": success, "skipped": skipped, "failed": failed}
+        return results
 
 
 if __name__ == "__main__":
     Log("kline_spider", log_type=Log.TYPE_FILE, level=logging.INFO)
-    pid_file = os.path.join(home(), 'apps', 'api', 'var', 'run', 'kline_spider.pid')
+    pid_file = os.path.join(home(), "apps", "api", "var", "run", "kline_spider.pid")
     single = ScriptSingle(pid_file)
 
     if single.is_running():
-        logging.error('there is script lock {}'.format(pid_file))
+        logging.error("there is script lock {}".format(pid_file))
         sys.exit(0)
     spider = StockKlineScraper()
     klines = spider.fetch_daily_klines()

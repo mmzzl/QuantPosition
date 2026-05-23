@@ -23,6 +23,16 @@
       </div>
     </div>
 
+    <el-alert
+      v-if="!loading && sectors.length === 0"
+      title="暂无热力图数据"
+      type="warning"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 16px"
+      description="K 线数据可能尚未采集，请先运行 K 线爬虫"
+    />
+
     <div v-loading="loading" class="heatmap-grid">
       <div
         v-for="sector in sectors"

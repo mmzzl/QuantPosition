@@ -4,11 +4,12 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import hashlib
+import hmac
 import base64
 import time
 import logging
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse, quote
 from systems.logs import Log
@@ -31,13 +32,13 @@ def send_dingtalk_message(title: str, content: str):
 
         if not webhook:
             logging.warning("钉钉 webhook 未配置")
-            return
+            return False
 
         timestamp = str(round(time.time() * 1000))
         if secret:
             sign_str = f"{timestamp}\n{secret}"
             sign = base64.b64encode(
-                hashlib.sha256(sign_str.encode("utf-8")).digest()
+                hmac.new(secret.encode("utf-8"), sign_str.encode("utf-8"), hashlib.sha256).digest()
             ).decode("utf-8")
             webhook += f"&timestamp={timestamp}&sign={quote(sign)}"
 
@@ -49,9 +50,12 @@ def send_dingtalk_message(title: str, content: str):
             }
         }
         resp = requests.post(webhook, json=payload, timeout=5)
-        logging.info(f"钉钉推送结果: {resp.json()}")
+        result = resp.json()
+        logging.info(f"钉钉推送结果: {result}")
+        return result.get("errcode") == 0
     except Exception as e:
         logging.error(f"钉钉推送失败: {e}")
+        return False
 
 
 class StockRuleEngine:
@@ -91,6 +95,12 @@ class StockRuleEngine:
         if position is None:
             position = {}
 
+        today = datetime.now().date()
+        today_num = today.toordinal()
+
+        buy_date = position.get("buy_date")
+        buy_date_num = buy_date.toordinal() if isinstance(buy_date, date) else today_num
+
         ctx = {
             "price": stock_data.get("close", 0),
             "vol": stock_data.get("volume", 0),
@@ -103,8 +113,8 @@ class StockRuleEngine:
             "open": stock_data.get("open", 0),
             "has_pos": position.get("has_pos", False),
             "cost": position.get("cost", 0),
-            "buy_date": position.get("buy_date", ""),
-            "today": datetime.now().strftime("%Y-%m-%d"),
+            "buy_date": buy_date_num,
+            "today": today_num,
         }
         return ctx
 
@@ -172,7 +182,7 @@ def run_rules_for_holdings():
 
     klines_raw = list(db.stock_kline.find({
         "code": {"$in": all_codes},
-        "frequency": 0,
+        "frequency": 9,
         "date": {"$gte": start_str, "$lte": end_str}
     }).sort("date", 1))
 
@@ -182,6 +192,7 @@ def run_rules_for_holdings():
 
     engine = StockRuleEngine(rules)
     triggered_messages = []
+    pending_alerts = []
 
     # 6. 构建持仓代码→持仓信息映射
     holding_map = {h["code"]: h for h in holdings}
@@ -207,23 +218,29 @@ def run_rules_for_holdings():
             "open": klines[-1].get("open", 0),
         }
 
+        stock_data["name"] = (
+            holding_map[code].get("name", "")
+            if code in holding_map
+            else buy_candidates.get(code, {}).get("name", "")
+        )
+
         if code in holding_map:
             h = holding_map[code]
             position = {
                 "has_pos": True,
                 "cost": h.get("average_cost", 0),
-                "buy_date": h.get("created_at", "").strftime("%Y-%m-%d") if isinstance(h.get("created_at"), datetime) else "",
+                "buy_date": h["created_at"].date() if isinstance(h.get("created_at"), datetime) else None,
             }
             user_id = h.get("user_id", "?")
         else:
-            position = {"has_pos": False, "cost": 0, "buy_date": ""}
+            position = {"has_pos": False, "cost": 0, "buy_date": None}
             user_id = buy_candidates.get(code, {}).get("user_id", "system")
 
         ctx = engine.build_context(stock_data, position)
         risk, sell_sc, buy_sc, triggered = engine.run(ctx)
 
         if triggered:
-            today_str = ctx["today"]
+            today_str = datetime.now().strftime("%Y-%m-%d")
             rule_ids = sorted(r["rule_id"] for r in triggered)
             dedup_key = f"{code}|{today_str}|{rule_ids}"
 
@@ -244,8 +261,8 @@ def run_rules_for_holdings():
             if risk:
                 msg = f"🚨 **风控触发**\n" + msg
 
-            # 写入告警日志
-            db.alert_log.insert_one({
+            triggered_messages.append(msg)
+            pending_alerts.append({
                 "dedup_key": dedup_key,
                 "code": code,
                 "date": today_str,
@@ -259,14 +276,17 @@ def run_rules_for_holdings():
                 "message": msg,
                 "created_at": datetime.now(),
             })
-            triggered_messages.append(msg)
 
-    # 8. 推送钉钉
-    if triggered_messages:
-        title = f"交易规则触发通知 ({len(triggered_messages)} 条)"
+    # 8. 推送钉钉，成功后才写告警日志
+    if pending_alerts:
+        title = f"交易规则触发通知 ({len(pending_alerts)} 条)"
         content = "\n---\n".join(triggered_messages)
-        send_dingtalk_message(title, content)
-        logging.info(f"推送 {len(triggered_messages)} 条规则触发消息")
+        if send_dingtalk_message(title, content):
+            for doc in pending_alerts:
+                db.alert_log.insert_one(doc)
+            logging.info(f"推送成功，记录 {len(pending_alerts)} 条告警")
+        else:
+            logging.warning(f"推送失败，未记录 {len(pending_alerts)} 条告警，下次重试")
     else:
         logging.info("本轮未触发任何规则")
 

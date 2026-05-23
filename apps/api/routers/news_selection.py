@@ -43,6 +43,8 @@ async def get_task_status(
 @router.get("/stocks")
 async def get_news_stocks(
     period: str = Query("24h", pattern="^(24h|7d|30d)$"),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
     sort_by: str = Query("expected_return", pattern="^(expected_return|current_price|risk)$"),
     sort_order: str = Query("desc", pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1),
@@ -51,7 +53,8 @@ async def get_news_stocks(
 ):
     try:
         result = NewsSelectionService.get_news_stocks(
-            period=period, sort_by=sort_by, sort_order=sort_order,
+            period=period, start_date=start_date, end_date=end_date,
+            sort_by=sort_by, sort_order=sort_order,
             page=page, page_size=page_size
         )
         return result

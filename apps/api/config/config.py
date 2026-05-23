@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 6379
 
+    # 交易费率
+    commission_rate: float = 0.0003
+    min_commission: float = 5.0
+    transfer_rate: float = 0.00001
+    stamp_duty_rate: float = 0.001
+
     class Config:
         extra = "allow"
 
@@ -56,7 +62,11 @@ def load_config(config_file='config.yaml'):
         jwt_algorithm=jwt_config.get('algorithm', 'HS256'),
         jwt_access_token_expire_minutes=jwt_config.get('access_token_expire_minutes', 30),
         redis_host=config.get('redis', {}).get('host', 'localhost'),
-        redis_port=config.get('redis', {}).get('port', 6379)
+        redis_port=config.get('redis', {}).get('port', 6379),
+        commission_rate=config.get('trade', {}).get('commission_rate', 0.0003),
+        min_commission=config.get('trade', {}).get('min_commission', 5.0),
+        transfer_rate=config.get('trade', {}).get('transfer_rate', 0.00001),
+        stamp_duty_rate=config.get('trade', {}).get('stamp_duty_rate', 0.001)
     )
 
 settings = load_config()

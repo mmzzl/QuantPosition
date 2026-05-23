@@ -3,11 +3,23 @@
     <div class="page-header">
       <h2>新闻选股</h2>
       <div class="controls">
-        <el-radio-group v-model="selectedPeriod" @change="fetchData">
+        <el-radio-group v-model="selectedPeriod" @change="onPeriodChange">
           <el-radio-button label="24h">24小时</el-radio-button>
           <el-radio-button label="7d">7天</el-radio-button>
           <el-radio-button label="30d">30天</el-radio-button>
+          <el-radio-button label="custom">自定义</el-radio-button>
         </el-radio-group>
+        <el-date-picker
+          v-if="selectedPeriod === 'custom'"
+          v-model="dateRange"
+          type="daterange"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          format="YYYY-MM-DD"
+          value-format="YYYY-MM-DD"
+          @change="fetchData"
+          style="margin-left: 10px"
+        />
         <el-select v-model="sortBy" @change="fetchData" style="width: 120px; margin-left: 10px">
           <el-option label="预期收益" value="expected_return" />
           <el-option label="当前价" value="current_price" />
@@ -114,6 +126,7 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const selectedPeriod = ref('24h')
+const dateRange = ref([])
 const sortBy = ref('expected_return')
 const sortOrder = ref('desc')
 const taskProgress = ref(null)
@@ -165,16 +178,29 @@ async function runSelection() {
   }
 }
 
+function onPeriodChange() {
+  if (selectedPeriod.value !== 'custom') dateRange.value = []
+  fetchData()
+}
+
 async function fetchData() {
   loading.value = true
   try {
-    const res = await getNewsStocks({
-      period: selectedPeriod.value,
+    if (selectedPeriod.value === 'custom' && (!dateRange.value || !dateRange.value[0])) return
+    const params = {}
+    if (selectedPeriod.value === 'custom') {
+      params.start_date = dateRange.value[0]
+      params.end_date = dateRange.value[1]
+    } else {
+      params.period = selectedPeriod.value
+    }
+    Object.assign(params, {
       sort_by: sortBy.value,
       sort_order: sortOrder.value,
       page: page.value,
       page_size: pageSize.value
     })
+    const res = await getNewsStocks(params)
     stocks.value = res.data.stocks || []
     total.value = res.data.total || 0
   } catch (e) {
@@ -189,13 +215,7 @@ async function showKLine(row) {
   klineData.value = []
   klineDialogVisible.value = true
   try {
-    const endDate = new Date()
-    const startDate = new Date()
-    startDate.setFullYear(startDate.getFullYear() - 1)
-    const res = await getKlineData(row.code, {
-      start_date: startDate.toISOString().split('T')[0],
-      end_date: endDate.toISOString().split('T')[0]
-    })
+    const res = await getKlineData(row.code)
     klineData.value = res.data.data || []
   } catch (e) {
     ElMessage.error('获取K线数据失败')

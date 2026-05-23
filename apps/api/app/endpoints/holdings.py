@@ -100,16 +100,6 @@ async def sell_holding(
 
     try:
         result = HoldingService.sell_holding(user_id, code, sell_data)
-
-        # 记录交易
-        TransactionService.create_transaction(
-            user_id=user_id,
-            code=code,
-            trans_type="sell",
-            quantity=sell_data.quantity,
-            price=sell_data.price
-        )
-
         return result
     except ValueError as e:
         raise HTTPException(

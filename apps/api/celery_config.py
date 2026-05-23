@@ -28,3 +28,4 @@ celery_app.conf.update(
 # 显式导入任务模块，确保 @celery_app.task 装饰器注册
 from tasks import selection_tasks  # noqa
 from tasks import news_selection_tasks  # noqa
+from tasks import kline_tasks  # noqa

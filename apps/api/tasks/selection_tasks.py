@@ -1,3 +1,4 @@
+import copy
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
 from celery_config import celery_app
@@ -33,7 +34,7 @@ def run_dual_ma_selection(
                 stock_name_map[pure] = s.get("stock_name", "")
 
         # 获取所有股票代码
-        all_codes = kline_collection.distinct("code", {"frequency": 0})
+        all_codes = kline_collection.distinct("code", {"frequency": 9})
         total_codes = len(all_codes)
         
         self.update_state(state='PROGRESS', meta={
@@ -56,13 +57,18 @@ def run_dual_ma_selection(
             # 获取该股票的K线数据
             klines = list(kline_collection.find({
                 "code": code,
-                "frequency": 0,
+                "frequency": 9,
                 "date": {"$gte": start_str, "$lte": end_str + " 23:59"}
             }).sort("date", 1))
             
             if len(klines) < long_period:
                 continue
-            
+
+            # 排除ST股票
+            name = stock_name_map.get(code, "")
+            if name.startswith("ST") or name.startswith("*ST"):
+                continue
+
             # 计算均线
             closes = [k["close"] for k in klines]
             
@@ -91,15 +97,24 @@ def run_dual_ma_selection(
                     }
                 })
         
-        # 保存结果到数据库（MongoDB 支持 datetime）
+        # 保存结果到数据库（深拷贝避免 insert_many 注入 ObjectId）
         if selected_stocks:
-            selection_collection.insert_many(selected_stocks)
+            selection_collection.insert_many(copy.deepcopy(selected_stocks))
 
         # 返回结果中 datetime 转字符串（Celery JSON 序列化要求）
         return_stocks = []
         for s in selected_stocks:
-            s["selection_date"] = s["selection_date"].strftime("%Y-%m-%d %H:%M:%S")
-            return_stocks.append(s)
+            return_stocks.append({
+                "code": s["code"],
+                "name": s["name"],
+                "short_ma": s["short_ma"],
+                "long_ma": s["long_ma"],
+                "current_price": s["current_price"],
+                "change_pct": s["change_pct"],
+                "selection_date": s["selection_date"].strftime("%Y-%m-%d %H:%M:%S"),
+                "strategy": s["strategy"],
+                "params": s["params"]
+            })
         
         self.update_state(state='PROGRESS', meta={
             'current': total_codes,
