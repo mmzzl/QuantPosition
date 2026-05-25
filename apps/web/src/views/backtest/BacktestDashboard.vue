@@ -105,7 +105,7 @@
 </template>
 
 <script>
-import { submitSimpleBacktest, getBacktestTaskStatus, saveBacktestResult, getLatestBacktest } from '@/api/backtest'
+import { submitSimpleBacktest, getBacktestTaskStatus, getLatestBacktest } from '@/api/backtest'
 
 export default {
   data() {
@@ -169,7 +169,7 @@ export default {
             if (!data || !data.trades) {
               this.$message.warning('回测完成，但没有产生有效交易')
             }
-            saveBacktestResult(result).catch(e => console.error('save fail', e))
+
           } else if (status === 'FAILURE') {
             clearInterval(this.pollTimer)
             this.pollTimer = null

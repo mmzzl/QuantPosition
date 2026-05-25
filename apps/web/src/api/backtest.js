@@ -8,10 +8,6 @@ export function getBacktestTaskStatus(taskId) {
   return http.get(`/backtest/task/${taskId}`)
 }
 
-export function saveBacktestResult(data) {
-  return http.post('/backtest/save', data)
-}
-
 export function getLatestBacktest() {
   return http.get('/backtest/latest')
 }

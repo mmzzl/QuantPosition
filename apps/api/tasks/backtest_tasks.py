@@ -5,6 +5,18 @@ from database import get_db
 from bin.rule_engine import StockRuleEngine
 
 
+def _save(name: str, data: dict):
+    try:
+        db = get_db()
+        db.backtest_results.replace_one(
+            {"_id": "latest"},
+            {**data, "name": name, "saved_at": datetime.now()},
+            upsert=True,
+        )
+    except Exception:
+        pass
+
+
 @celery_app.task(bind=True, name="tasks.backtest.run_simple")
 def run_simple_backtest(
     self,
@@ -216,7 +228,9 @@ def run_simple_backtest(
                 })
 
     if not all_trades:
-        return {"strategy": "dual_ma", "days_back": days_back, "trades": 0}
+        ret = {"strategy": "dual_ma", "days_back": days_back, "trades": 0}
+        _save("dual_ma", ret)
+        return ret
 
     returns = [t["return_pct"] for t in all_trades]
     wins = sum(1 for r in returns if r > 0)
@@ -250,13 +264,15 @@ def run_simple_backtest(
         "examples": [t for t in all_trades[:10]],
     }
 
-    return {
+    ret = {
         "strategy": "dual_ma",
         "days_back": days_back,
         "signal_count": total_signals,
         "rules_loaded": bool(rules_loaded),
         "results": result,
     }
+    _save("dual_ma", ret)
+    return ret
 
 
 @celery_app.task(bind=True, name="tasks.backtest.run_with_rules")
