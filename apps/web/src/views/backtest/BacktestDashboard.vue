@@ -49,8 +49,8 @@
               <el-divider />
               <div class="perf-detail">
                 <div>总收益: {{ r.total_return }}%</div>
-                <div>最佳: {{ r.best_return }}%</div>
-                <div>最差: {{ r.worst_return }}%</div>
+                <div>最佳: {{ r.best || r.best_return }}%</div>
+                <div>最差: {{ r.worst || r.worst_return }}%</div>
               </div>
               <el-collapse v-if="r.examples?.length" style="margin-top:8px">
                 <el-collapse-item title="示例交易" name="1">
@@ -65,7 +65,7 @@
         </el-row>
         <el-card v-if="result.results?.summary" class="summary-card" style="margin-top:16px">
           <template #header>总体统计</template>
-          <div>分析信号数: {{ result.selections_analyzed }}</div>
+          <div>分析信号数: {{ result.signal_count || result.selections_analyzed }}</div>
           <div>平均收益率: {{ result.results.summary.avg_return }}%</div>
           <div>平均最大回撤: {{ result.results.summary.avg_max_drawdown }}%</div>
         </el-card>
@@ -82,8 +82,8 @@
           <el-divider />
           <div class="perf-detail">
             <div>总收益: {{ result.total_return }}%</div>
-            <div>最佳: {{ result.best_return }}%</div>
-            <div>最差: {{ result.worst_return }}%</div>
+            <div>最佳: {{ result.best || result.best_return }}%</div>
+            <div>最差: {{ result.worst || result.worst_return }}%</div>
           </div>
         </el-card>
         <el-table v-if="result.trade_details" :data="result.trade_details" style="margin-top:16px" size="small">
