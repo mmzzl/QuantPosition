@@ -11,7 +11,8 @@ router = APIRouter(prefix="/backtest", tags=["回测"])
 async def backtest_simple_submit(
     strategy: str = Query("dual_ma", regex="^(dual_ma|news)$"),
     days_back: int = Query(180, ge=30, le=730),
-    hold_days: str = Query("5,20,60"),
+    hold_days: str = Query("60"),
+    use_rules: bool = Query(False),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     try:
@@ -19,9 +20,10 @@ async def backtest_simple_submit(
         task = run_simple_backtest.delay(
             strategy=strategy,
             days_back=days_back,
-            hold_days=hold_list or [5, 20, 60],
+            hold_days=hold_list or [60],
+            use_rules=use_rules,
         )
-        return {"task_id": task.id, "message": "回测任务已提交"}
+        return {"task_id": task.id, "message": "回测任务已提交", "use_rules": use_rules}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"提交失败: {str(e)}")
 

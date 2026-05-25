@@ -11,15 +11,28 @@ def run_simple_backtest(
     strategy: str = "dual_ma",
     days_back: int = 180,
     hold_days: List[int] = None,
+    use_rules: bool = False,
 ) -> Dict[str, Any]:
     if hold_days is None:
         hold_days = [5, 20, 60]
 
-    self.update_state(state="PROGRESS", meta={"current": 0, "total": 0, "status": "加载K线数据..."})
+    self.update_state(state="PROGRESS", meta={"current": 0, "total": 0, "status": "加载数据..."})
 
     db = get_db()
     today = datetime.now()
     max_hold = max(hold_days) + 5
+
+    rules_loaded = None
+    rule_engine = None
+    if use_rules:
+        rules = list(db.trading_rules.find({"enabled": True}).sort("rule_id", 1))
+        if rules:
+            rule_engine = StockRuleEngine(rules)
+            rules_loaded = [r["name"] for r in rules]
+            self.update_state(state="PROGRESS", meta={
+                "current": 0, "total": 0,
+                "status": f"加载{len(rules)}条规则，开始回测..."
+            })
 
     # 选取有足够K线数据的股票代码
     all_codes = db.stock_kline.distinct("code", {"frequency": 9})
@@ -106,41 +119,101 @@ def run_simple_backtest(
             "code": code, "frequency": 9,
             "date": {"$gte": f"{buy_day} 15:00", "$lte": f"{end_day} 15:00"},
         }).sort("date", 1))
-
         if not klines:
             continue
 
-        # 带止损：价格跌破买入价 8% 就平仓
-        stop_pct = 0.08
-        exit_day = None
-        exit_price = None
+        if rule_engine:
+            # ===== 规则引擎路径：买入规则确认 + 卖出规则退出 =====
+            closes = [k["close"] for k in klines]
+            volumes = [k["volume"] for k in klines]
 
-        for i, k in enumerate(klines):
-            low_p = min(k["low"], k["close"])
-            if low_p < buy_price * (1 - stop_pct):
-                exit_day = i
-                exit_price = k["close"]
-                break
+            # 信号日运行买入规则做确认
+            day0_sd = {
+                "close": closes[0], "volume": volumes[0],
+                "ma5": sum(closes[:5]) / 5 if len(closes) >= 5 else closes[0],
+                "ma10": sum(closes[:10]) / 10 if len(closes) >= 10 else closes[0],
+                "ma5_vol": sum(volumes[:5]) / 5 if len(volumes) >= 5 else volumes[0],
+                "last_close": closes[0], "high": closes[0], "low": closes[0],
+                "open": klines[0]["open"], "name": sig["name"],
+            }
+            pos = {"has_pos": False, "cost": 0, "buy_date": today.date()}
+            ctx = StockRuleEngine.build_context(day0_sd, pos)
+            _, _, buy_score, _ = rule_engine.run(ctx)
+            if buy_score < 0.5:
+                continue
 
-        if exit_day is not None:
-            ret = round((exit_price - buy_price) / buy_price * 100, 2)
-            all_trades.append({
-                "code": code, "name": sig["name"],
-                "buy_date": buy_day, "buy_price": round(buy_price, 2),
-                "sell_date": klines[exit_day]["date"][:10],
-                "sell_price": round(exit_price, 2), "return_pct": ret,
-                "stopped_out": True, "hold_days": exit_day,
-            })
-        elif len(klines) >= max_hold:
-            sell_price = klines[max_hold - 1]["close"]
-            ret = round((sell_price - buy_price) / buy_price * 100, 2)
-            all_trades.append({
-                "code": code, "name": sig["name"],
-                "buy_date": buy_day, "buy_price": round(buy_price, 2),
-                "sell_date": klines[max_hold - 1]["date"][:10],
-                "sell_price": round(sell_price, 2), "return_pct": ret,
-                "stopped_out": False, "hold_days": max_hold,
-            })
+            # 买入后逐日运行卖出/风控规则
+            exit_info = None
+            for i in range(1, len(klines)):
+                sd = {
+                    "close": closes[i], "volume": volumes[i],
+                    "ma5": sum(closes[max(0, i - 4):i + 1]) / min(5, i + 1),
+                    "ma10": sum(closes[max(0, i - 9):i + 1]) / min(10, i + 1),
+                    "ma5_vol": sum(volumes[max(0, i - 4):i + 1]) / min(5, i + 1),
+                    "last_close": closes[i - 1],
+                    "high": max(k["high"] for k in klines[max(0, i - 19):i + 1]),
+                    "low": min(k["low"] for k in klines[max(0, i - 19):i + 1]),
+                    "open": klines[i]["open"], "name": sig["name"],
+                }
+                pos = {"has_pos": True, "cost": buy_price, "buy_date": today.date()}
+                ctx = StockRuleEngine.build_context(sd, pos)
+                risk, sell_sc, _, triggered = rule_engine.run(ctx)
+                if risk or sell_sc > 0:
+                    exit_info = {
+                        "exit_day": i, "exit_price": closes[i],
+                        "triggered_rules": [r["name"] for r in triggered],
+                        "risk_triggered": risk,
+                    }
+                    break
+
+            if exit_info:
+                ret = round((exit_info["exit_price"] - buy_price) / buy_price * 100, 2)
+                all_trades.append({
+                    "code": code, "name": sig["name"],
+                    "buy_date": buy_day, "buy_price": round(buy_price, 2),
+                    "sell_date": klines[exit_info["exit_day"]]["date"][:10],
+                    "sell_price": round(exit_info["exit_price"], 2),
+                    "return_pct": ret, "hold_days": exit_info["exit_day"],
+                    "triggered_rules": exit_info["triggered_rules"],
+                    "risk_triggered": exit_info["risk_triggered"],
+                })
+            elif len(klines) >= max_hold:
+                ret = round((klines[max_hold - 1]["close"] - buy_price) / buy_price * 100, 2)
+                all_trades.append({
+                    "code": code, "name": sig["name"],
+                    "buy_date": buy_day, "buy_price": round(buy_price, 2),
+                    "sell_date": klines[max_hold - 1]["date"][:10],
+                    "sell_price": round(klines[max_hold - 1]["close"], 2),
+                    "return_pct": ret, "hold_days": max_hold,
+                    "triggered_rules": [], "risk_triggered": False,
+                })
+        else:
+            # ===== 无规则路径：固定持有 + 8%硬止损 =====
+            stop_pct = 0.08
+            exit_day = None
+            for i, k in enumerate(klines):
+                if min(k["low"], k["close"]) < buy_price * (1 - stop_pct):
+                    exit_day = i
+                    break
+
+            if exit_day is not None:
+                ret = round((klines[exit_day]["close"] - buy_price) / buy_price * 100, 2)
+                all_trades.append({
+                    "code": code, "name": sig["name"],
+                    "buy_date": buy_day, "buy_price": round(buy_price, 2),
+                    "sell_date": klines[exit_day]["date"][:10],
+                    "sell_price": round(klines[exit_day]["close"], 2),
+                    "return_pct": ret, "stopped_out": True, "hold_days": exit_day,
+                })
+            elif len(klines) >= max_hold:
+                ret = round((klines[max_hold - 1]["close"] - buy_price) / buy_price * 100, 2)
+                all_trades.append({
+                    "code": code, "name": sig["name"],
+                    "buy_date": buy_day, "buy_price": round(buy_price, 2),
+                    "sell_date": klines[max_hold - 1]["date"][:10],
+                    "sell_price": round(klines[max_hold - 1]["close"], 2),
+                    "return_pct": ret, "stopped_out": False, "hold_days": max_hold,
+                })
 
     if not all_trades:
         return {"strategy": "dual_ma", "days_back": days_back, "trades": 0}
@@ -148,7 +221,8 @@ def run_simple_backtest(
     returns = [t["return_pct"] for t in all_trades]
     wins = sum(1 for r in returns if r > 0)
     losses = sum(1 for r in returns if r <= 0)
-    stopped = sum(1 for t in all_trades if t.get("stopped_out"))
+    stopped = sum(1 for t in all_trades if t.get("stopped_out") or t.get("triggered_rules"))
+    rule_triggered = sum(1 for t in all_trades if t.get("triggered_rules"))
 
     win_returns = [r for r in returns if r > 0]
     loss_returns = [r for r in returns if r <= 0]
@@ -170,6 +244,8 @@ def run_simple_backtest(
         "profit_factor": profit_factor,
         "sharpe": sharpe,
         "stopped_out": stopped,
+        "rule_triggered": rule_triggered,
+        "rules_loaded": rules_loaded,
         "max_hold_days": max_hold,
         "examples": [t for t in all_trades[:10]],
     }
@@ -178,6 +254,7 @@ def run_simple_backtest(
         "strategy": "dual_ma",
         "days_back": days_back,
         "signal_count": total_signals,
+        "rules_loaded": bool(rules_loaded),
         "results": result,
     }
 
