@@ -32,7 +32,7 @@
     <el-progress v-if="running && progress" :percentage="progress.pct" style="margin-bottom:16px" :status="progress.status" />
     <div v-if="running" style="color:#909399;margin-bottom:16px">{{ progress?.text || '提交任务...' }}</div>
 
-    <div v-if="!running && !result" style="text-align:center;padding:40px;color:#909399">
+    <div v-if="loaded && !running && !result" style="text-align:center;padding:40px;color:#909399">
       点击「运行回测」开始测试
     </div>
     <div v-loading="running">
@@ -105,7 +105,7 @@
 </template>
 
 <script>
-import { submitSimpleBacktest, getBacktestTaskStatus } from '@/api/backtest'
+import { submitSimpleBacktest, getBacktestTaskStatus, saveBacktestResult, getLatestBacktest } from '@/api/backtest'
 
 export default {
   data() {
@@ -118,7 +118,18 @@ export default {
       signalCount: 0,
       useRules: false,
       pollTimer: null,
+      loaded: false,
     }
+  },
+  async mounted() {
+    try {
+      const res = await getLatestBacktest()
+      if (res.data.exists !== false) {
+        this.result = res.data.results || res.data
+        this.signalCount = res.data.signal_count || 0
+      }
+    } catch (e) { /* ignore */ }
+    this.loaded = true
   },
   beforeUnmount() {
     if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null }
@@ -158,6 +169,7 @@ export default {
             if (!data || !data.trades) {
               this.$message.warning('回测完成，但没有产生有效交易')
             }
+            saveBacktestResult(result).catch(e => console.error('save fail', e))
           } else if (status === 'FAILURE') {
             clearInterval(this.pollTimer)
             this.pollTimer = null

@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from typing import Dict, Any, List
+from datetime import datetime
 
 from app.core.auth import AuthenticatedUser, get_current_user
 from tasks.backtest_tasks import run_simple_backtest, run_rule_backtest
+from database import get_db
 
 router = APIRouter(prefix="/backtest", tags=["回测"])
 
@@ -38,6 +40,33 @@ async def backtest_rules_submit(
         return {"task_id": task.id, "message": "规则回测任务已提交"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"提交失败: {str(e)}")
+
+
+@router.post("/save")
+async def save_backtest_result(
+    data: Dict[str, Any] = Body(...),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    db = get_db()
+    doc = {
+        **data,
+        "saved_at": datetime.now(),
+    }
+    db.backtest_results.replace_one({"_id": "latest"}, doc, upsert=True)
+    return {"saved": True}
+
+
+@router.get("/latest")
+async def get_latest_backtest(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    db = get_db()
+    doc = db.backtest_results.find_one({"_id": "latest"})
+    if not doc:
+        return {"exists": False}
+    doc.pop("_id", None)
+    doc.pop("saved_at", None)
+    return doc
 
 
 @router.get("/task/{task_id}")
