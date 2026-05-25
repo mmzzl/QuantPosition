@@ -40,6 +40,8 @@ def run_simple_backtest(
     start_str = (today - timedelta(days=lookback)).strftime("%Y-%m-%d")
     end_str = today.strftime("%Y-%m-%d")
 
+    import statistics
+
     signals = []
     for idx, code in enumerate(all_codes):
         if idx % 200 == 0:
@@ -63,24 +65,23 @@ def run_simple_backtest(
         if name.startswith("ST") or name.startswith("*ST"):
             continue
 
-        # 查找金叉：短均线上穿长均线
-        for i in range(20, len(klines) - max_hold):
+        i = 20
+        while i < len(klines) - max_hold:
             short_ma = sum(closes[i - 5:i]) / 5
             long_ma = sum(closes[i - 20:i]) / 20
             prev_short = sum(closes[i - 6:i - 1]) / 5
             prev_long = sum(closes[i - 21:i - 1]) / 20
 
             if prev_short <= prev_long and short_ma > long_ma:
-                buy_price = closes[i]
-                buy_day = dates[i][:10]
                 signals.append({
-                    "code": code,
-                    "name": name,
-                    "buy_day": buy_day,
-                    "buy_price": buy_price,
+                    "code": code, "name": name,
+                    "buy_day": dates[i][:10],
+                    "buy_price": closes[i],
                     "signal_idx": i,
                 })
-                break
+                i += 20
+            else:
+                i += 1
 
     total_signals = len(signals)
     self.update_state(state="PROGRESS", meta={
@@ -88,9 +89,7 @@ def run_simple_backtest(
         "status": f"找到{total_signals}个金叉信号，开始回测..."
     })
 
-    trades_flat = {d: [] for d in hold_days}
-    stats = {}
-
+    all_trades = []
     for idx, sig in enumerate(signals):
         if idx % 20 == 0:
             self.update_state(state="PROGRESS", meta={
@@ -108,57 +107,72 @@ def run_simple_backtest(
             "date": {"$gte": f"{buy_day} 15:00", "$lte": f"{end_day} 15:00"},
         }).sort("date", 1))
 
-        if len(klines) < max_hold:
+        if not klines:
             continue
 
-        for days in hold_days:
-            if len(klines) >= days:
-                sp = klines[days - 1]["close"]
-                ret = round((sp - buy_price) / buy_price * 100, 2)
-                trades_flat[days].append({
-                    "code": code, "name": sig["name"],
-                    "buy_date": buy_day, "buy_price": round(buy_price, 2),
-                    "sell_date": klines[days - 1]["date"][:10],
-                    "sell_price": round(sp, 2), "return_pct": ret,
-                })
+        # 带止损：价格跌破买入价 8% 就平仓
+        stop_pct = 0.08
+        exit_day = None
+        exit_price = None
 
-        prices = [k["close"] for k in klines[:max_hold]]
-        peak = max(prices)
-        trough = min(prices)
-        dd = round((trough - peak) / peak * 100, 2) if peak else 0
-        stats[code] = {
-            "buy_price": round(buy_price, 2),
-            "final_price": round(prices[-1], 2),
-            "return_pct": round((prices[-1] - buy_price) / buy_price * 100, 2),
-            "max_drawdown": dd,
-        }
+        for i, k in enumerate(klines):
+            low_p = min(k["low"], k["close"])
+            if low_p < buy_price * (1 - stop_pct):
+                exit_day = i
+                exit_price = k["close"]
+                break
 
-    result = {}
-    for d in hold_days:
-        trades = trades_flat[d]
-        if not trades:
-            result[f"{d}d"] = {"trades": 0}
-            continue
-        returns = [t["return_pct"] for t in trades]
-        wins = sum(1 for r in returns if r > 0)
-        result[f"{d}d"] = {
-            "trades": len(trades),
-            "win_rate": round(wins / len(trades) * 100, 1),
-            "avg_return": round(sum(returns) / len(returns), 2),
-            "total_return": round(sum(returns), 2),
-            "best": max(returns),
-            "worst": min(returns),
-            "examples": trades[:10],
-        }
+        if exit_day is not None:
+            ret = round((exit_price - buy_price) / buy_price * 100, 2)
+            all_trades.append({
+                "code": code, "name": sig["name"],
+                "buy_date": buy_day, "buy_price": round(buy_price, 2),
+                "sell_date": klines[exit_day]["date"][:10],
+                "sell_price": round(exit_price, 2), "return_pct": ret,
+                "stopped_out": True, "hold_days": exit_day,
+            })
+        elif len(klines) >= max_hold:
+            sell_price = klines[max_hold - 1]["close"]
+            ret = round((sell_price - buy_price) / buy_price * 100, 2)
+            all_trades.append({
+                "code": code, "name": sig["name"],
+                "buy_date": buy_day, "buy_price": round(buy_price, 2),
+                "sell_date": klines[max_hold - 1]["date"][:10],
+                "sell_price": round(sell_price, 2), "return_pct": ret,
+                "stopped_out": False, "hold_days": max_hold,
+            })
 
-    if stats:
-        all_ret = [s["return_pct"] for s in stats.values()]
-        all_dd = [s["max_drawdown"] for s in stats.values()]
-        result["summary"] = {
-            "stocks": len(stats),
-            "avg_return": round(sum(all_ret) / len(all_ret), 2),
-            "avg_max_drawdown": round(sum(all_dd) / len(all_dd), 2),
-        }
+    if not all_trades:
+        return {"strategy": "dual_ma", "days_back": days_back, "trades": 0}
+
+    returns = [t["return_pct"] for t in all_trades]
+    wins = sum(1 for r in returns if r > 0)
+    losses = sum(1 for r in returns if r <= 0)
+    stopped = sum(1 for t in all_trades if t.get("stopped_out"))
+
+    win_returns = [r for r in returns if r > 0]
+    loss_returns = [r for r in returns if r <= 0]
+    avg_win = round(sum(win_returns) / len(win_returns), 2) if win_returns else 0
+    avg_loss = round(sum(loss_returns) / len(loss_returns), 2) if loss_returns else 0
+
+    profit_factor = round(abs(sum(win_returns) / sum(loss_returns)), 2) if sum(loss_returns) != 0 else 99
+    sharpe = round(statistics.mean(returns) / statistics.stdev(returns) * (252 ** 0.5), 2) if len(returns) > 1 and statistics.stdev(returns) > 0 else 0
+
+    result = {
+        "trades": len(all_trades),
+        "win_rate": round(wins / len(all_trades) * 100, 1),
+        "avg_return": round(sum(returns) / len(returns), 2),
+        "total_return": round(sum(returns), 2),
+        "best": max(returns),
+        "worst": min(returns),
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "profit_factor": profit_factor,
+        "sharpe": sharpe,
+        "stopped_out": stopped,
+        "max_hold_days": max_hold,
+        "examples": [t for t in all_trades[:10]],
+    }
 
     return {
         "strategy": "dual_ma",
