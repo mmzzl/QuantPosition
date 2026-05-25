@@ -139,8 +139,6 @@ export default {
       try {
         const params = { days_back: this.daysBack, hold_days: String(this.maxHold || 60), use_rules: this.useRules }
         const res = await submitSimpleBacktest(params)
-          res = await submitRuleBacktest(params)
-        }
         this.startPolling(res.data.task_id)
       } catch (e) {
         this.$message.error('提交失败: ' + (e.response?.data?.detail || e.message))
