@@ -52,6 +52,11 @@ def _ensure_indexes(db):
     db.alert_log.create_index([("dedup_key", ASCENDING)], unique=True)
     db.alert_log.create_index([("created_at", -1)])
 
+    # Paper positions indexes
+    db.paper_positions.create_index([("code", ASCENDING)])
+    db.paper_positions.create_index([("status", ASCENDING)])
+    db.paper_positions.create_index([("created_at", -1)])
+
 
 def query_sort_end(colletion, sort_end = ''):
     """查询数据库中最新的新闻的realSort作为sortEnd"""

@@ -309,6 +309,117 @@ async def get_portfolio(
     }
 
 
+# ===== 板块集中度 =====
+
+@router.get("/{user_id}/sector-exposure")
+async def get_sector_exposure(
+    user_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """获取持仓板块分布"""
+    if current_user.user_id != user_id and not _is_admin(current_user):
+        raise HTTPException(status_code=403, detail="无权限访问")
+
+    db = get_db()
+    holdings_list = list(db.holdings.find({"user_id": user_id}))
+    if not holdings_list:
+        return {"sectors": [], "holdings_count": 0}
+
+    codes = [h["code"] for h in holdings_list]
+    sectors = list(db.sector_stocks.find({"stock_code": {"$in": codes}}))
+    sector_map = {s["stock_code"]: s.get("sector_name", "其他") for s in sectors}
+
+    sector_total = {}
+    sector_holdings = {}
+    for h in holdings_list:
+        code = h["code"]
+        sec = sector_map.get(code, "其他")
+        cost = h["quantity"] * h["average_cost"]
+        sector_total[sec] = sector_total.get(sec, 0) + cost
+        sector_holdings.setdefault(sec, []).append({
+            "code": code,
+            "name": h.get("name", ""),
+            "cost": round(cost, 2),
+        })
+
+    total_cost = sum(sector_total.values()) or 1
+    sector_list = [
+        {
+            "sector": sec,
+            "cost": round(cost, 2),
+            "pct": round(cost / total_cost * 100, 1),
+            "stock_count": len(sector_holdings[sec]),
+            "stocks": sector_holdings[sec],
+        }
+        for sec, cost in sorted(sector_total.items(), key=lambda x: -x[1])
+    ]
+
+    return {"sectors": sector_list, "holdings_count": len(holdings_list)}
+
+
+@router.get("/{user_id}/correlation")
+async def get_correlation(
+    user_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """获取持仓股票相关性矩阵"""
+    if current_user.user_id != user_id and not _is_admin(current_user):
+        raise HTTPException(status_code=403, detail="无权限访问")
+
+    import statistics
+
+    db = get_db()
+    holdings_list = list(db.holdings.find({"user_id": user_id}))
+    if len(holdings_list) < 2:
+        return {"error": "至少需要2只持仓股票"}
+
+    codes = [h["code"] for h in holdings_list]
+    names = {h["code"]: h.get("name", "") for h in holdings_list}
+
+    min_bars = None
+    all_returns = {}
+    for h in holdings_list:
+        klines = list(db.stock_kline.find(
+            {"code": h["code"], "frequency": 9},
+            sort=[("date", -1)],
+            limit=60,
+        ))
+        if len(klines) < 10:
+            continue
+        klines.reverse()
+        prices = [k["close"] for k in klines]
+        returns = []
+        for i in range(1, len(prices)):
+            ret = (prices[i] - prices[i - 1]) / prices[i - 1]
+            returns.append(ret)
+        all_returns[h["code"]] = returns
+        if min_bars is None or len(returns) < min_bars:
+            min_bars = len(returns)
+
+    if not all_returns or len(all_returns) < 2:
+        return {"error": "K线数据不足"}
+
+    codes_with_data = list(all_returns.keys())
+
+    def pearson(x, y):
+        n = len(x)
+        mx, my = sum(x) / n, sum(y) / n
+        num = sum((x[i] - mx) * (y[i] - my) for i in range(n))
+        den = (sum((xi - mx) ** 2 for xi in x) * sum((yi - my) ** 2 for yi in y)) ** 0.5
+        return round(num / den, 4) if den else 0
+
+    matrix = []
+    for c1 in codes_with_data:
+        row = {"code": c1, "name": names.get(c1, "")}
+        for c2 in codes_with_data:
+            r1 = all_returns[c1][:min_bars]
+            r2 = all_returns[c2][:min_bars]
+            row[c2] = pearson(r1, r2)
+        matrix.append(row)
+
+    return {"codes": codes_with_data, "matrix": matrix}
+
+
 # ===== 管理员接口 =====
 
 @router.get("/admin")
