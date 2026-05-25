@@ -29,18 +29,12 @@
       </el-tag>
     </div>
 
-    <div v-if="mode === 'rules'" style="margin-bottom:16px">
-      <el-select v-model="daysBack" style="width:140px">
-        <el-option label="近 90 天" :value="90" />
-        <el-option label="近 180 天" :value="180" />
-        <el-option label="近 365 天" :value="365" />
-      </el-select>
-      <el-tag type="warning" style="margin-left:12px">使用你配置的卖出/风控规则模拟交易</el-tag>
-    </div>
-
     <el-progress v-if="running && progress" :percentage="progress.pct" style="margin-bottom:16px" :status="progress.status" />
     <div v-if="running" style="color:#909399;margin-bottom:16px">{{ progress?.text || '提交任务...' }}</div>
 
+    <div v-if="!running && !result" style="text-align:center;padding:40px;color:#909399">
+      点击「运行回测」开始测试
+    </div>
     <div v-loading="running">
       <template v-if="result">
         <el-row :gutter="16">
@@ -156,9 +150,14 @@ export default {
             clearInterval(this.pollTimer)
             this.pollTimer = null
             this.running = false
-            this.result = result.results || result
+            console.log('backtest result:', result)
+            const data = result.results || result
+            this.result = data
             this.signalCount = result.signal_count || result.selections_analyzed
             this.progress = { pct: 100, text: '完成', status: 'success' }
+            if (!data || !data.trades) {
+              this.$message.warning('回测完成，但没有产生有效交易')
+            }
           } else if (status === 'FAILURE') {
             clearInterval(this.pollTimer)
             this.pollTimer = null
