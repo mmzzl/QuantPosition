@@ -124,9 +124,12 @@ export default {
   async mounted() {
     try {
       const res = await getLatestBacktest()
-      if (res.data.exists !== false) {
-        this.result = res.data.results || res.data
-        this.signalCount = res.data.signal_count || 0
+      if (res.data && res.data.exists !== false) {
+        const inner = res.data.results || res.data
+        if (inner && typeof inner.trades !== 'undefined') {
+          this.result = inner
+          this.signalCount = res.data.signal_count || 0
+        }
       }
     } catch (e) { /* ignore */ }
     this.loaded = true

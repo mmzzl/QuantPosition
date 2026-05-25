@@ -228,9 +228,7 @@ def run_simple_backtest(
                 })
 
     if not all_trades:
-        ret = {"strategy": "dual_ma", "days_back": days_back, "trades": 0}
-        _save("dual_ma", ret)
-        return ret
+        return {"strategy": "dual_ma", "days_back": days_back, "trades": 0}
 
     returns = [t["return_pct"] for t in all_trades]
     wins = sum(1 for r in returns if r > 0)
