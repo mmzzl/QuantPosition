@@ -29,3 +29,4 @@ celery_app.conf.update(
 from tasks import selection_tasks  # noqa
 from tasks import news_selection_tasks  # noqa
 from tasks import kline_tasks  # noqa
+from tasks import backtest_tasks  # noqa

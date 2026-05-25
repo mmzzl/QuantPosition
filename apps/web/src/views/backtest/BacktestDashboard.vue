@@ -7,7 +7,7 @@
           <el-option label="选股回测" value="simple" />
           <el-option label="规则引擎回测" value="rules" />
         </el-select>
-        <el-button @click="runBacktest" type="primary" :loading="loading">运行回测</el-button>
+        <el-button @click="runBacktest" type="primary" :loading="running">运行回测</el-button>
       </div>
     </div>
 
@@ -32,7 +32,10 @@
       <el-tag type="warning" style="margin-left:12px">使用你配置的卖出/风控规则模拟交易</el-tag>
     </div>
 
-    <div v-loading="loading">
+    <el-progress v-if="running && progress" :percentage="progress.pct" style="margin-bottom:16px" :status="progress.status" />
+    <div v-if="running" style="color:#909399;margin-bottom:16px">{{ progress?.text || '提交任务...' }}</div>
+
+    <div v-loading="running">
       <template v-if="result && mode === 'simple'">
         <el-row :gutter="16">
           <el-col :span="8" v-for="(r, period) in result.results" :key="period">
@@ -49,7 +52,7 @@
                 <div>最佳: {{ r.best_return }}%</div>
                 <div>最差: {{ r.worst_return }}%</div>
               </div>
-              <el-collapse v-if="r.examples && r.examples.length" style="margin-top:8px">
+              <el-collapse v-if="r.examples?.length" style="margin-top:8px">
                 <el-collapse-item title="示例交易" name="1">
                   <div v-for="t in r.examples.slice(0,5)" :key="t.code" class="trade-row">
                     <span>{{ t.name || t.code }}</span>
@@ -60,10 +63,9 @@
             </el-card>
           </el-col>
         </el-row>
-
-        <el-card v-if="result.results.summary" class="summary-card" style="margin-top:16px">
-          <div slot="header">总体统计</div>
-          <div>分析股票数: {{ result.results.summary.stocks }}</div>
+        <el-card v-if="result.results?.summary" class="summary-card" style="margin-top:16px">
+          <template #header>总体统计</template>
+          <div>分析信号数: {{ result.selections_analyzed }}</div>
           <div>平均收益率: {{ result.results.summary.avg_return }}%</div>
           <div>平均最大回撤: {{ result.results.summary.avg_max_drawdown }}%</div>
         </el-card>
@@ -84,7 +86,6 @@
             <div>最差: {{ result.worst_return }}%</div>
           </div>
         </el-card>
-
         <el-table v-if="result.trade_details" :data="result.trade_details" style="margin-top:16px" size="small">
           <el-table-column prop="code" label="代码" width="90" />
           <el-table-column prop="name" label="名称" width="100" />
@@ -98,7 +99,7 @@
             </template>
           </el-table-column>
           <el-table-column prop="hold_days" label="持有天数" width="80" />
-          <el-table-column prop="triggered_rules" label="触发规则" min-width="150">
+          <el-table-column label="触发规则" min-width="150">
             <template v-slot="{ row }">
               <el-tag v-for="r in (row.triggered_rules||[])" :key="r" size="small" style="margin-right:4px">{{ r }}</el-tag>
             </template>
@@ -110,8 +111,7 @@
 </template>
 
 <script>
-import { getSimpleBacktest, getRuleBacktest } from '@/api/backtest'
-import { getUserId } from '@/utils/auth'
+import { submitSimpleBacktest, submitRuleBacktest, getBacktestTaskStatus } from '@/api/backtest'
 
 export default {
   data() {
@@ -119,29 +119,68 @@ export default {
       mode: 'simple',
       strategy: 'dual_ma',
       daysBack: 180,
-      loading: false,
+      running: false,
+      progress: null,
       result: null,
+      pollTimer: null,
     }
+  },
+  beforeUnmount() {
+    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null }
   },
   methods: {
     async runBacktest() {
-      this.loading = true
+      this.running = true
       this.result = null
+      this.progress = { pct: 0, text: '提交任务...', status: '' }
+
       try {
         const params = { days_back: this.daysBack }
+        let res
         if (this.mode === 'simple') {
           params.strategy = this.strategy
-          const res = await getSimpleBacktest(params)
-          this.result = res.data
+          res = await submitSimpleBacktest(params)
         } else {
-          const res = await getRuleBacktest(params)
-          this.result = res.data
+          res = await submitRuleBacktest(params)
         }
+        this.startPolling(res.data.task_id)
       } catch (e) {
-        this.$message.error('回测失败: ' + (e.response?.data?.detail || e.message))
-      } finally {
-        this.loading = false
+        this.$message.error('提交失败: ' + (e.response?.data?.detail || e.message))
+        this.running = false
       }
+    },
+    startPolling(taskId) {
+      if (this.pollTimer) clearInterval(this.pollTimer)
+      this.pollTimer = setInterval(async () => {
+        try {
+          const res = await getBacktestTaskStatus(taskId)
+          const { status, progress, result, error } = res.data
+
+          if (status === 'SUCCESS') {
+            clearInterval(this.pollTimer)
+            this.pollTimer = null
+            this.running = false
+            this.result = result
+            this.progress = { pct: 100, text: '完成', status: 'success' }
+          } else if (status === 'FAILURE') {
+            clearInterval(this.pollTimer)
+            this.pollTimer = null
+            this.running = false
+            this.$message.error('回测失败: ' + (error || '未知错误'))
+            this.progress = { pct: 100, text: '失败', status: 'exception' }
+          } else if (status === 'PROGRESS' && progress) {
+            const cur = progress.current || 0
+            const total = progress.total || 1
+            this.progress = {
+              pct: Math.round(cur / total * 100),
+              text: progress.status || `处理中 ${cur}/${total}`,
+              status: '',
+            }
+          }
+        } catch (e) {
+          console.error('poll error', e)
+        }
+      }, 1500)
     }
   }
 }

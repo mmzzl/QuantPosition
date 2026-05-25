@@ -2,13 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import Dict, Any, List
 
 from app.core.auth import AuthenticatedUser, get_current_user
-from services.backtest_service import BacktestService
+from tasks.backtest_tasks import run_simple_backtest, run_rule_backtest
 
 router = APIRouter(prefix="/backtest", tags=["回测"])
 
 
-@router.get("/simple")
-async def backtest_simple(
+@router.post("/simple")
+async def backtest_simple_submit(
     strategy: str = Query("dual_ma", regex="^(dual_ma|news)$"),
     days_back: int = Query(180, ge=30, le=730),
     hold_days: str = Query("5,20,60"),
@@ -16,33 +16,43 @@ async def backtest_simple(
 ):
     try:
         hold_list = [int(x) for x in hold_days.split(",") if x.strip().isdigit()]
-        result = BacktestService.run_simple(
+        task = run_simple_backtest.delay(
             strategy=strategy,
             days_back=days_back,
             hold_days=hold_list or [5, 20, 60],
         )
-        return result
+        return {"task_id": task.id, "message": "回测任务已提交"}
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"回测失败: {str(e)}",
-        )
+        raise HTTPException(status_code=500, detail=f"提交失败: {str(e)}")
 
 
-@router.get("/with-rules")
-async def backtest_with_rules(
+@router.post("/with-rules")
+async def backtest_rules_submit(
     days_back: int = Query(180, ge=30, le=730),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     try:
-        result = BacktestService.run_with_rules(days_back=days_back)
-        if "error" in result:
-            raise HTTPException(status_code=400, detail=result["error"])
-        return result
-    except HTTPException:
-        raise
+        task = run_rule_backtest.delay(days_back=days_back)
+        return {"task_id": task.id, "message": "规则回测任务已提交"}
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"规则回测失败: {str(e)}",
-        )
+        raise HTTPException(status_code=500, detail=f"提交失败: {str(e)}")
+
+
+@router.get("/task/{task_id}")
+async def get_backtest_task_status(
+    task_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    from celery.result import AsyncResult
+
+    task_result = AsyncResult(task_id)
+    response = {"task_id": task_id, "status": task_result.status}
+
+    if task_result.status == "SUCCESS":
+        response["result"] = task_result.result
+    elif task_result.status == "PROGRESS":
+        response["progress"] = task_result.info
+    elif task_result.status == "FAILURE":
+        response["error"] = str(task_result.result)
+
+    return response

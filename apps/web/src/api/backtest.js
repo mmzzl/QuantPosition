@@ -1,9 +1,13 @@
 import http from '@/utils/http'
 
-export function getSimpleBacktest(params = {}) {
-  return http.get('/backtest/simple', { params })
+export function submitSimpleBacktest(params = {}) {
+  return http.post('/backtest/simple', null, { params })
 }
 
-export function getRuleBacktest(params = {}) {
-  return http.get('/backtest/with-rules', { params })
+export function submitRuleBacktest(params = {}) {
+  return http.post('/backtest/with-rules', null, { params })
+}
+
+export function getBacktestTaskStatus(taskId) {
+  return http.get(`/backtest/task/${taskId}`)
 }
