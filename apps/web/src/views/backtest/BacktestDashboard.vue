@@ -72,7 +72,7 @@
           </el-col>
         </el-row>
         <el-card class="summary-card" style="margin-top:16px">
-          <template #header>回测详情 ({{ result.signal_count }} 个金叉信号)</template>
+          <template #header>回测详情 ({{ signalCount }} 个金叉信号)</template>
           <div class="stat-grid">
             <div><label>持有上限</label><span>{{ result.max_hold_days }} 天</span></div>
             <div><label>总收益率</label><span :class="lrClass(result.total_return)">{{ result.total_return }}%</span></div>
@@ -163,6 +163,7 @@ export default {
       running: false,
       progress: null,
       result: null,
+      signalCount: 0,
       pollTimer: null,
     }
   },
@@ -203,8 +204,8 @@ export default {
             clearInterval(this.pollTimer)
             this.pollTimer = null
             this.running = false
-            desc = progress?.status
-            this.result = result
+            this.result = result.results || result
+            this.signalCount = result.signal_count || result.selections_analyzed
             this.progress = { pct: 100, text: '完成', status: 'success' }
           } else if (status === 'FAILURE') {
             clearInterval(this.pollTimer)
