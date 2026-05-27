@@ -1,21 +1,19 @@
 import backtrader as bt
 import pandas as pd
+import logging
 from datetime import datetime, date as date_cls
 from typing import Dict, Any, List, Optional
 from database import get_db
 
-
 class RuleStrategy(bt.Strategy):
-    """规则驱动策略：从 MongoDB 加载规则，每根 K 线调用规则引擎决策"""
-
     params = dict(stop_loss_pct=0.08, max_hold_days=60)
 
     def __init__(self):
         from bin.rule_engine import StockRuleEngine
-
         db = get_db()
-        rules = list(db.trading_rules.find({"enabled": True}).sort("rule_id", 1))
-        self.engine = StockRuleEngine(rules) if rules else None
+        self.rules = list(db.trading_rules.find({"enabled": True}).sort("rule_id", 1))
+        self.engine = StockRuleEngine(self.rules) if self.rules else None
+        logging.info(f"[RuleStrategy] loaded {len(self.rules)} rules: {[r['name'] for r in self.rules]}")
 
         self.sma5 = bt.indicators.SMA(self.data.close, period=5)
         self.sma10 = bt.indicators.SMA(self.data.close, period=10)
@@ -29,6 +27,7 @@ class RuleStrategy(bt.Strategy):
         self.equity = []
 
     def _build_ctx(self, has_pos, cost, buy_date, today):
+        from bin.rule_engine import StockRuleEngine
         return StockRuleEngine.build_context({
             "close": self.data.close[0],
             "volume": self.data.volume[0],
@@ -45,23 +44,22 @@ class RuleStrategy(bt.Strategy):
     def next(self):
         dt = self.data.datetime.date(0)
         self.equity.append({"date": dt.isoformat(), "value": round(self.broker.getvalue(), 2)})
-
         if not self.engine or len(self.data) < 20:
             return
 
         if not self.position:
             ctx = self._build_ctx(False, 0, dt, dt)
-            _, _, buy_score, _ = self.engine.run(ctx)
+            _, _, buy_score, buy_triggered = self.engine.run(ctx)
             if buy_score >= 0.5:
                 size = int((self.broker.getcash() * 0.95) / self.data.close[0])
                 if size > 0:
                     self.buy(size=size)
                     self.entry_price = self.data.close[0]
                     self.entry_date = dt
+                    logging.info(f"[BUY] {dt} price={self.entry_price:.2f} size={size} buy_score={buy_score} rules={[r['name'] for r in buy_triggered]}")
         else:
             ctx = self._build_ctx(True, self.entry_price, self.entry_date, dt)
             risk, sell_score, _, triggered = self.engine.run(ctx)
-
             reason = None
             if risk:
                 reason = "risk"
@@ -75,6 +73,7 @@ class RuleStrategy(bt.Strategy):
             if reason:
                 pnl = round((self.data.close[0] - self.entry_price) / self.entry_price * 100, 2)
                 self.sell(size=self.position.size)
+                logging.info(f"[SELL] {dt} price={self.data.close[0]:.2f} pnl={pnl}% reason={reason} rules={[r['name'] for r in (triggered or [])]}")
                 self.trades.append({
                     "entry_date": self.entry_date.isoformat(),
                     "exit_date": dt.isoformat(),
@@ -94,12 +93,12 @@ STRATEGIES = {"rule_engine": RuleStrategy}
 
 def _load_klines(code, start, end):
     db = get_db()
-    klines = list(db.stock_kline.find({
-        "code": code, "frequency": 9,
-        "date": {"$gte": f"{start} 15:00", "$lte": f"{end} 15:00"},
-    }).sort("date", 1))
+    query = {"code": code, "frequency": 9, "date": {"$gte": f"{start} 15:00", "$lte": f"{end} 15:00"}}
+    klines = list(db.stock_kline.find(query).sort("date", 1))
     if not klines or len(klines) < 30:
+        logging.debug(f"[SKIP] code={code} klines={len(klines)} (< 30)")
         return None
+    logging.debug(f"[LOAD] code={code} klines={len(klines)} range={klines[0]['date']} ~ {klines[-1]['date']}")
     rows = [{"datetime": pd.Timestamp(k["date"][:10]),
              "open": float(k["open"]), "high": float(k["high"]),
              "low": float(k["low"]), "close": float(k["close"]),
@@ -119,16 +118,19 @@ def run_backtest(
 
     cls = STRATEGIES.get(strategy_name)
     if not cls:
-        return {"error": f"未知策略: {strategy_name}"}
+        return {"error": f"unknown strategy: {strategy_name}"}
 
     if not start_date:
         start_date = (datetime.now() - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
     if not end_date:
         end_date = datetime.now().strftime("%Y-%m-%d")
 
+    logging.info(f"[BACKTEST] strategy={strategy_name} period={start_date}~{end_date} cash={initial_cash} commission={commission}")
+
     db = get_db()
     if not codes:
         codes = db.stock_kline.distinct("code", {"frequency": 9})
+        logging.info(f"[BACKTEST] loaded {len(codes)} codes from stock_kline")
 
     name_map = {}
     for s in db.sector_stocks.find({}, {"stock_code": 1, "stock_name": 1}):
@@ -136,13 +138,18 @@ def run_backtest(
         name_map[pure] = s.get("stock_name", "")
 
     filtered = [c for c in codes if not name_map.get(c, "").startswith(("ST", "*ST"))]
+    logging.info(f"[BACKTEST] after ST filter: {len(filtered)} codes (removed {len(codes) - len(filtered)} ST stocks)")
 
     all_trades = []
     all_equity = []
     processed = 0
     skipped = 0
+    no_data = 0
 
-    for code in filtered:
+    for i, code in enumerate(filtered):
+        if (i + 1) % 500 == 0:
+            logging.info(f"[BACKTEST] progress: {i+1}/{len(filtered)} processed={processed} skipped={skipped}")
+
         df = _load_klines(code, start_date, end_date)
         if df is None:
             skipped += 1
@@ -162,8 +169,11 @@ def run_backtest(
             all_trades.extend(strat.trades)
             all_equity.extend(strat.equity)
             processed += 1
-        except Exception:
+        except Exception as e:
+            logging.error(f"[BACKTEST] error processing {code}: {e}")
             skipped += 1
+
+    logging.info(f"[BACKTEST] done: processed={processed} skipped={skipped} trades={len(all_trades)}")
 
     if not all_trades:
         return {"strategy": strategy_name, "trades": 0, "processed": processed, "skipped": skipped}
@@ -180,7 +190,7 @@ def run_backtest(
     sharpe = round(statistics.mean(pnls) / statistics.stdev(pnls) * (252 ** 0.5), 2) \
         if len(pnls) > 1 and statistics.stdev(pnls) > 0 else 0
 
-    return {
+    result = {
         "strategy": strategy_name,
         "trades": len(all_trades),
         "processed": processed,
@@ -197,3 +207,5 @@ def run_backtest(
         "exit_stats": exit_stats,
         "examples": all_trades[:10],
     }
+    logging.info(f"[BACKTEST] result: win_rate={result['win_rate']}% avg_return={result['avg_return']}% profit_factor={result['profit_factor']} sharpe={sharpe}")
+    return result
