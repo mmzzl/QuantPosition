@@ -15,4 +15,8 @@ specs/005-sector-heatmap/plan.md
 - 密码加密 (passlib/bcrypt)
 - Vue 3 + Element Plus
 - Apache ECharts (K线图)
+### 约束
+- 先想清楚再写
+- 不明白的先问
+- 设计大于实践，方向错了，后面再怎么努力也没用
 <!-- SPECKIT END -->
