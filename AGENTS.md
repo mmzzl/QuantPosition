@@ -19,4 +19,5 @@ specs/005-sector-heatmap/plan.md
 - 先想清楚再写
 - 不明白的先问
 - 设计大于实践，方向错了，后面再怎么努力也没用
+- 日志一定要记录清楚，日志用logging记录
 <!-- SPECKIT END -->

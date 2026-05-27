@@ -202,7 +202,26 @@ async function fetchRules() {
   finally { loading.value = false }
 }
 
+const ALLOWED_VARS = ['price', 'vol', 'ma5', 'ma10', 'ma5_vol', 'last_close', 'high', 'low', 'open', 'has_pos', 'cost', 'buy_date', 'today']
+const FORBIDDEN = ['import', 'exec', 'eval', 'open', 'os', 'sys', 'subprocess', '__import__', '__builtins__', '__class__', 'getattr', 'setattr', 'globals', 'locals', 'compile', 'breakpoint']
+
+function validateCondition(cond) {
+  if (!cond || !cond.trim()) return '条件不能为空'
+  if (/[;@`]/.test(cond)) return '条件包含非法字符'
+  const words = cond.match(/[a-zA-Z_]\w*/g) || []
+  for (const w of words) {
+    if (FORBIDDEN.includes(w)) return `不允许使用: ${w}`
+    if (!ALLOWED_VARS.includes(w) && !['and', 'or', 'not', 'True', 'False', 'none', 'None'].includes(w) && !/^\d+$/.test(w)) return `未知变量: ${w}`
+  }
+  return null
+}
+
 async function saveRule() {
+  const err = validateCondition(form.value.condition)
+  if (err) {
+    ElMessage.error(err)
+    return
+  }
   saving.value = true
   try {
     if (editing.value) {
@@ -214,7 +233,7 @@ async function saveRule() {
     }
     dialogVisible.value = false
     await fetchRules()
-  } catch { ElMessage.error('保存失败') }
+  } catch (e) { ElMessage.error(e.response?.data?.detail || '保存失败') }
   finally { saving.value = false }
 }
 

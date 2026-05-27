@@ -6,6 +6,44 @@ from services.rule_service import RuleService
 
 router = APIRouter(prefix="/rules", tags=["交易规则"])
 
+ALLOWED_VARS = {
+    "price", "vol", "ma5", "ma10", "ma5_vol", "last_close",
+    "high", "low", "open", "has_pos", "cost", "buy_date", "today",
+    "True", "False",
+}
+FORBIDDEN_NAMES = {
+    "import", "exec", "eval", "open", "os", "sys", "subprocess",
+    "__import__", "__builtins__", "__class__", "__subclasses__",
+    "getattr", "setattr", "delattr", "globals", "locals", "vars",
+    "compile", "breakpoint", "exit", "quit",
+}
+
+
+def validate_condition(condition: str):
+    if not condition or not condition.strip():
+        raise HTTPException(status_code=400, detail="条件不能为空")
+
+    import ast
+    try:
+        tree = ast.parse(condition, mode="eval")
+    except SyntaxError as e:
+        raise HTTPException(status_code=400, detail=f"语法错误: {e.msg} (第{e.lineno}行第{e.offset}列)")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            name = node.id
+            if name in FORBIDDEN_NAMES:
+                raise HTTPException(status_code=400, detail=f"不允许使用: {name}")
+            if name not in ALLOWED_VARS and not name.isdigit():
+                raise HTTPException(status_code=400, detail=f"未知变量: {name}，可用变量: {', '.join(sorted(ALLOWED_VARS))}")
+        if isinstance(node, ast.Attribute):
+            raise HTTPException(status_code=400, detail=f"不允许使用属性访问: .{node.attr}")
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            raise HTTPException(status_code=400, detail="不允许使用 import")
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_NAMES:
+                raise HTTPException(status_code=400, detail=f"不允许调用: {node.func.id}()")
+
 
 class RuleCreate(BaseModel):
     name: str
@@ -43,6 +81,8 @@ async def create_rule(
     data: RuleCreate,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
+    if data.condition:
+        validate_condition(data.condition)
     return RuleService.create_rule(data.model_dump())
 
 
@@ -63,7 +103,10 @@ async def update_rule(
     data: RuleUpdate,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
-    ok = RuleService.update_rule(rule_id, data.model_dump(exclude_none=True))
+    update_data = data.model_dump(exclude_none=True)
+    if "condition" in update_data and update_data["condition"]:
+        validate_condition(update_data["condition"])
+    ok = RuleService.update_rule(rule_id, update_data)
     if not ok:
         raise HTTPException(status_code=404, detail="规则不存在或无变化")
     return {"message": "更新成功"}
