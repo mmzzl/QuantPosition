@@ -6,6 +6,9 @@ if sys.platform == 'win32':
 
     def flock_exclusive(filepath):
         """Windows file lock using msvcrt"""
+        file_dir = os.path.dirname(filepath)
+        if not os.path.exists(file_dir):
+            os.makedirs(file_dir)
         pidfile = open(filepath, 'wb')
         try:
             msvcrt.locking(pidfile.fileno(), msvcrt.LK_NBLCK, 1)

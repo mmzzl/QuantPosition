@@ -11,3 +11,7 @@ export function getBacktestTaskStatus(taskId) {
 export function getLatestBacktest() {
   return http.get('/backtest/latest')
 }
+
+export function getStrategies() {
+  return http.get('/backtest/strategies')
+}
