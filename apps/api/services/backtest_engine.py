@@ -56,7 +56,9 @@ class RuleStrategy(bt.Strategy):
                     self.buy(size=size)
                     self.entry_price = self.data.close[0]
                     self.entry_date = dt
-                    logging.info(f"[BUY] {dt} price={self.entry_price:.2f} size={size} buy_score={buy_score} rules={[r['name'] for r in buy_triggered]}")
+                    logging.info(f"[BUY] {dt} price={self.entry_price:.2f} size={size} buy_score={buy_score} triggered_rules={[r['name'] for r in buy_triggered]}")
+            elif buy_triggered:
+                logging.debug(f"[BUY_SKIP] {dt} price={self.data.close[0]:.2f} buy_score={buy_score} triggered_rules={[r['name'] for r in buy_triggered]} (score < 0.5)")
         else:
             ctx = self._build_ctx(True, self.entry_price, self.entry_date, dt)
             risk, sell_score, _, triggered = self.engine.run(ctx)
@@ -73,7 +75,11 @@ class RuleStrategy(bt.Strategy):
             if reason:
                 pnl = round((self.data.close[0] - self.entry_price) / self.entry_price * 100, 2)
                 self.sell(size=self.position.size)
-                logging.info(f"[SELL] {dt} price={self.data.close[0]:.2f} pnl={pnl}% reason={reason} rules={[r['name'] for r in (triggered or [])]}")
+                logging.info(
+                    f"[SELL] {dt} entry={self.entry_price:.2f} exit={self.data.close[0]:.2f} "
+                    f"pnl={pnl}% hold={reason} hold_days={(dt - self.entry_date).days} "
+                    f"cost={self.entry_price:.2f} triggered_rules={[r['name'] for r in (triggered or [])]}"
+                )
                 self.trades.append({
                     "entry_date": self.entry_date.isoformat(),
                     "exit_date": dt.isoformat(),
@@ -169,6 +175,9 @@ def run_backtest(
             all_trades.extend(strat.trades)
             all_equity.extend(strat.equity)
             processed += 1
+            if strat.trades:
+                logging.info(f"[STOCK] {code} {name_map.get(code, '')} trades={len(strat.trades)} "
+                             f"returns={[t['pnl_pct'] for t in strat.trades]}")
         except Exception as e:
             logging.error(f"[BACKTEST] error processing {code}: {e}")
             skipped += 1
@@ -207,5 +216,15 @@ def run_backtest(
         "exit_stats": exit_stats,
         "examples": all_trades[:10],
     }
-    logging.info(f"[BACKTEST] result: win_rate={result['win_rate']}% avg_return={result['avg_return']}% profit_factor={result['profit_factor']} sharpe={sharpe}")
+    logging.info(f"[BACKTEST] result: win_rate={result['win_rate']}% avg_return={result['avg_return']}% "
+                 f"total_return={result['total_return']}% profit_factor={result['profit_factor']} sharpe={sharpe}")
+    logging.info(f"[BACKTEST] exit_stats: {exit_stats}")
+    logging.info(f"[BACKTEST] best={result['best']}% worst={result['worst']}% avg_win={result['avg_win']}% avg_loss={result['avg_loss']}%")
+
+    for t in all_trades:
+        logging.info(f"[TRADE] {t['code']} {t.get('name','')} "
+                     f"buy={t['entry_date']}@{t['entry_price']} "
+                     f"sell={t['exit_date']}@{t['exit_price']} "
+                     f"pnl={t['pnl_pct']}% hold={t['hold_days']}d "
+                     f"reason={t['reason']} rules={t.get('triggered_rules',[])}")
     return result
