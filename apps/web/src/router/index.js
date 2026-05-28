@@ -19,6 +19,9 @@ import DualMASelection from '@/views/selections/DualMA.vue'
 import NewsSelection from '@/views/selections/NewsSelection.vue'
 import NewsView from '@/views/NewsView.vue'
 import TradingRules from '@/views/TradingRules.vue'
+import RuleCandidates from '@/views/RuleCandidates.vue'
+import BacktestDashboard from '@/views/backtest/BacktestDashboard.vue'
+import PaperTrading from '@/views/paper/PaperTrading.vue'
 
 const routes = [
   {
@@ -133,6 +136,24 @@ const routes = [
         name: 'TradingRules',
         component: TradingRules,
         meta: { requiresAdmin: true, title: '交易规则', permission: 'rules:view', menuPath: '/rules' }
+      },
+      {
+        path: 'candidates',
+        name: 'RuleCandidates',
+        component: RuleCandidates,
+        meta: { requiresAdmin: true, title: '候选规则', permission: 'rules:view', menuPath: '/rules' }
+      },
+      {
+        path: 'backtest',
+        name: 'BacktestDashboard',
+        component: BacktestDashboard,
+        meta: { requiresAdmin: true, title: '策略回测', permission: 'holdings:view', menuPath: '/backtest' }
+      },
+      {
+        path: 'paper-trading',
+        name: 'PaperTrading',
+        component: PaperTrading,
+        meta: { requiresAdmin: true, title: '模拟盘', permission: 'holdings:view', menuPath: '/paper-trading' }
       }
     ]
   }

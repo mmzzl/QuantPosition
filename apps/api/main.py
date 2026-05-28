@@ -34,6 +34,10 @@ from routers.news_selection import router as news_selection_router
 from routers.news import router as news_router
 # 交易规则路由
 from routers.rules import router as rules_router
+# 回测路由
+from routers.backtest import router as backtest_router
+# 模拟盘路由
+from routers.paper_trading import router as paper_trading_router
 
 Log("rest_api", log_type=Log.TYPE_FILE, level=logging.INFO)
 
@@ -77,6 +81,10 @@ app.include_router(news_selection_router)
 app.include_router(news_router)
 # 交易规则路由
 app.include_router(rules_router)
+# 回测路由
+app.include_router(backtest_router)
+# 模拟盘路由
+app.include_router(paper_trading_router)
 
 
 @app.get("/")

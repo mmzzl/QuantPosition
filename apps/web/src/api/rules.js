@@ -23,3 +23,51 @@ export function deleteRule(ruleId) {
 export function batchDeleteRules(ruleIds) {
   return http.post('/rules/batch-delete', { rule_ids: ruleIds })
 }
+
+export function validateCondition(condition) {
+  return http.post('/rules/validate', { condition })
+}
+
+export function getExploreStatus() {
+  return http.get('/rules/explore/status')
+}
+
+export function startExplore() {
+  return http.post('/rules/explore')
+}
+
+export function startValidateCandidates(scope = 'all', limit = 500) {
+  return http.post('/rules/validate-candidates', { scope, limit })
+}
+
+export function applyCandidates() {
+  return http.post('/rules/apply-candidates')
+}
+
+export function getCandidates(params = {}) {
+  return http.get('/rules/candidates', { params })
+}
+
+export function deleteCandidate(id) {
+  return http.delete(`/rules/candidates/${id}`)
+}
+
+export function clearCandidates(scope = 'all') {
+  return http.delete('/rules/candidates', { data: { scope } })
+}
+
+export function getBlacklist(params = {}) {
+  return http.get('/rules/blacklist', { params })
+}
+
+export function deleteBlacklist(id) {
+  return http.delete(`/rules/blacklist/${id}`)
+}
+
+export function getBackups() {
+  return http.get('/rules/backup')
+}
+
+export function restoreBackup(id) {
+  return http.post(`/rules/backup/${id}/restore`)
+}

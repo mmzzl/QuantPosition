@@ -25,7 +25,9 @@
       "permission": "selections:view",
       "children": [
         {"path": "/selections/dual-ma", "label": "双均线选股", "permission": "selections:view"},
-        {"path": "/selections/news", "label": "新闻选股", "permission": "selections:view"}
+        {"path": "/selections/news", "label": "新闻选股", "permission": "selections:view"},
+        {"path": "/backtest", "label": "策略回测", "permission": "holdings:view"},
+        {"path": "/paper-trading", "label": "模拟盘", "permission": "holdings:view"}
       ]
     },
     {
@@ -51,7 +53,8 @@
     "label": "交易规则",
     "permission": "rules:view",
     "children": [
-      {"path": "/rules", "label": "规则列表", "permission": "rules:view"}
+      {"path": "/rules", "label": "规则列表", "permission": "rules:view"},
+      {"path": "/candidates", "label": "候选规则", "permission": "rules:view"}
     ]
   }
 ]

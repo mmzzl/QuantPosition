@@ -1,10 +1,63 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
+from bson import ObjectId
 from app.core.auth import AuthenticatedUser, get_current_user
 from services.rule_service import RuleService
+from database import get_db
 
 router = APIRouter(prefix="/rules", tags=["交易规则"])
+
+FORBIDDEN_NAMES = {
+    "import", "exec", "eval", "os", "sys", "subprocess",
+    "__import__", "__builtins__", "__class__", "__subclasses__",
+    "getattr", "setattr", "delattr", "globals", "locals", "vars",
+    "compile", "breakpoint", "exit", "quit",
+}
+
+TEST_CTX = {
+    "price": 25.5, "vol": 100000, "ma5": 25.0, "ma10": 24.5,
+    "ma5_vol": 80000, "last_close": 25.3, "high": 27.0, "low": 23.0,
+    "open": 25.4, "has_pos": True, "cost": 26.0,
+    "buy_date": 739500, "today": 739520,
+}
+
+
+def _validate_condition(condition: str):
+    if not condition or not condition.strip():
+        return "条件不能为空"
+
+    import ast
+    try:
+        tree = ast.parse(condition, mode="eval")
+    except SyntaxError as e:
+        return f"语法错误: {e.msg} (第{e.lineno}行第{e.offset}列)"
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
+            return f"不允许使用: {node.id}"
+        if isinstance(node, ast.Attribute):
+            return f"不允许属性访问: .{node.attr}"
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return "不允许 import"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_NAMES:
+            return f"不允许调用: {node.func.id}()"
+
+    try:
+        result = eval(condition, {"__builtins__": {}}, TEST_CTX)
+    except Exception as e:
+        return f"执行错误: {e}"
+
+    if not isinstance(result, (bool, int, float)):
+        return f"条件必须返回 True/False，当前返回: {type(result).__name__}"
+
+    return None
+
+
+def validate_condition(condition: str):
+    err = _validate_condition(condition)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
 
 
 class RuleCreate(BaseModel):
@@ -43,8 +96,208 @@ async def create_rule(
     data: RuleCreate,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
+    if data.condition:
+        validate_condition(data.condition)
     return RuleService.create_rule(data.model_dump())
 
+
+class ConditionValidate(BaseModel):
+    condition: str
+
+
+@router.post("/validate")
+async def validate_condition_endpoint(
+    data: ConditionValidate,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    err = _validate_condition(data.condition)
+    if err:
+        return {"valid": False, "error": err}
+    try:
+        result = eval(data.condition, {"__builtins__": {}}, TEST_CTX)
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+    return {"valid": True, "result": result}
+
+
+# === 规则探索相关端点（必须在 /{rule_id} 之前）===
+
+@router.get("/explore/status")
+async def get_explore_status(
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    db = get_db()
+    progress = db.rule_explore_progress.find_one({"_id": "current"})
+    if not progress:
+        return {"status": "idle", "phase": "none"}
+    progress.pop("_id", None)
+    return progress
+
+
+from tasks.rule_explore_tasks import run_rule_exploration
+
+@router.post("/explore")
+async def start_explore(
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    db = get_db()
+    progress = db.rule_explore_progress.find_one({"_id": "current"})
+    if progress and progress.get("status") == "running":
+        raise HTTPException(status_code=409, detail="已有探索任务在运行中，请等待完成")
+
+    settings = db.system_settings.find_one({"_id": "global"}) or {}
+    if not settings.get("llm_api_key"):
+        raise HTTPException(status_code=400, detail="请先在系统设置中配置 LLM API Key")
+
+    task = run_rule_exploration.delay()
+    return {"task_id": task.id, "message": "探索任务已启动"}
+
+
+from tasks.rule_explore_tasks import run_rule_validation
+
+class ValidateRequest(BaseModel):
+    scope: str = "all"
+    limit: int = 500
+
+@router.post("/validate-candidates")
+async def start_validate(
+    data: ValidateRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    task = run_rule_validation.delay(data.scope, data.limit)
+    return {"task_id": task.id, "message": "验证任务已启动"}
+
+
+@router.post("/apply-candidates")
+async def apply_candidates_endpoint(
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    from services.rule_explorer import apply_candidates
+    result = apply_candidates()
+    return {"message": result}
+
+
+@router.get("/candidates")
+async def list_candidates(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    validated: Optional[bool] = None,
+    validation_round: Optional[int] = None,
+    source: Optional[str] = None,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    db = get_db()
+    query = {}
+    if validated is not None:
+        query["validated"] = validated
+    if validation_round is not None:
+        query["validation_round"] = validation_round
+    if source:
+        query["source"] = source
+
+    total = db.rule_candidates.count_documents(query)
+    items = list(db.rule_candidates.find(query)
+                 .sort("composite_score", -1)
+                 .skip((page - 1) * page_size)
+                 .limit(page_size))
+    for item in items:
+        item["_id"] = str(item["_id"])
+    return {"candidates": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.delete("/candidates/{candidate_id}")
+async def delete_candidate(
+    candidate_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    db = get_db()
+    result = db.rule_candidates.delete_one({"_id": ObjectId(candidate_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="候选规则不存在")
+    return {"message": "已删除"}
+
+
+class ClearRequest(BaseModel):
+    scope: str = "all"
+
+@router.delete("/candidates")
+async def clear_candidates(
+    data: ClearRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    db = get_db()
+    query = {}
+    if data.scope == "validated":
+        query["validated"] = True
+    elif data.scope == "unvalidated":
+        query["validated"] = False
+    result = db.rule_candidates.delete_many(query)
+    return {"message": f"已清空 {result.deleted_count} 条候选规则"}
+
+
+@router.get("/blacklist")
+async def list_blacklist(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    db = get_db()
+    total = db.rule_blacklist.count_documents({})
+    items = list(db.rule_blacklist.find()
+                 .sort("created_at", -1)
+                 .skip((page - 1) * page_size)
+                 .limit(page_size))
+    for item in items:
+        item["_id"] = str(item["_id"])
+    return {"blacklist": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.delete("/blacklist/{blacklist_id}")
+async def delete_blacklist(
+    blacklist_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    db = get_db()
+    result = db.rule_blacklist.delete_one({"_id": ObjectId(blacklist_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="黑名单记录不存在")
+    return {"message": "已从黑名单移除"}
+
+
+@router.get("/backup")
+async def list_backups(
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    db = get_db()
+    items = list(db.rule_backup.find().sort("backup_at", -1).limit(20))
+    for item in items:
+        item["_id"] = str(item["_id"])
+        item["rules_count"] = len(item.get("rules", []))
+    return {"backups": items}
+
+
+@router.post("/backup/{backup_id}/restore")
+async def restore_backup(
+    backup_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    db = get_db()
+    backup = db.rule_backup.find_one({"_id": ObjectId(backup_id)})
+    if not backup:
+        raise HTTPException(status_code=404, detail="备份不存在")
+
+    rules = backup.get("rules", [])
+    db.trading_rules.delete_many({})
+    for rule in rules:
+        rule.pop("_id", None)
+        rule["rule_id"] = db.trading_rules.count_documents({}) + 1
+        rule["enabled"] = True
+        db.trading_rules.insert_one(rule)
+
+    return {"message": f"已恢复 {len(rules)} 条规则"}
+
+
+# === 原有规则 CRUD 端点 ===
 
 @router.get("/{rule_id}")
 async def get_rule(
@@ -63,7 +316,10 @@ async def update_rule(
     data: RuleUpdate,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
-    ok = RuleService.update_rule(rule_id, data.model_dump(exclude_none=True))
+    update_data = data.model_dump(exclude_none=True)
+    if "condition" in update_data and update_data["condition"]:
+        validate_condition(update_data["condition"])
+    ok = RuleService.update_rule(rule_id, update_data)
     if not ok:
         raise HTTPException(status_code=404, detail="规则不存在或无变化")
     return {"message": "更新成功"}

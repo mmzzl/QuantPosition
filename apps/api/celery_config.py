@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 # 确保当前目录在模块搜索路径中（celery 可能从其他目录启动）
 _app_dir = os.path.dirname(os.path.abspath(__file__))
 if _app_dir not in sys.path:
@@ -7,6 +8,7 @@ if _app_dir not in sys.path:
 
 from celery import Celery
 from config.config import settings
+from systems.logs import Log
 
 celery_app = Celery(
     'tasks',
@@ -29,3 +31,6 @@ celery_app.conf.update(
 from tasks import selection_tasks  # noqa
 from tasks import news_selection_tasks  # noqa
 from tasks import kline_tasks  # noqa
+from tasks import backtest_tasks  # noqa
+from tasks import rule_explore_tasks  # noqa
+Log("celery", log_type=Log.TYPE_FILE, level=logging.INFO)

@@ -89,16 +89,83 @@
         </el-table-column>
       </el-table>
     </el-card>
+
+    <el-row :gutter="16" style="margin-top:20px">
+      <el-col :span="12">
+        <el-card v-loading="sectorLoading">
+          <template #header><span>板块分布</span></template>
+          <div v-if="sectors.length">
+            <div v-for="s in sectors" :key="s.sector" class="sector-row">
+              <div class="sector-label">{{ s.sector }}</div>
+              <el-progress
+                :percentage="s.pct"
+                :color="s.pct > 30 ? '#f56c6c' : s.pct > 15 ? '#e6a23c' : '#67c23a'"
+                :stroke-width="18"
+                :format="() => s.pct + '%'"
+              />
+              <div class="sector-count">{{ s.stock_count }}只</div>
+            </div>
+          </div>
+          <div v-else style="color:#999;text-align:center;padding:20px">暂无持仓或未找到板块信息</div>
+        </el-card>
+      </el-col>
+      <el-col :span="12">
+        <el-card v-loading="corrLoading">
+          <template #header><span>相关性矩阵</span></template>
+          <div v-if="corrCodes.length >= 2">
+            <div class="corr-header">
+              <span></span>
+              <span v-for="c in corrCodes" :key="c" class="corr-code">{{ c }}</span>
+            </div>
+            <div v-for="c1 in corrCodes" :key="c1" class="corr-row">
+              <span class="corr-code">{{ c1 }}</span>
+              <span
+                v-for="c2 in corrCodes"
+                :key="c2"
+                class="corr-val"
+                :style="{ background: corrColor(getCorr(c1, c2)) }"
+              >{{ getCorr(c1, c2) }}</span>
+            </div>
+            <div style="margin-top:8px;font-size:12px;color:#999">
+              <span style="background:#f56c6c;padding:2px 6px;margin-right:8px">正相关</span>
+              <span style="background:#e6a23c;padding:2px 6px;margin-right:8px">中</span>
+              <span style="background:#67c23a;padding:2px 6px">低/负相关</span>
+            </div>
+          </div>
+          <div v-else style="color:#999;text-align:center;padding:20px">
+            {{ corrError || '至少需要2只持仓股票' }}
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getPortfolio } from '@/api/holdings'
+import { getPortfolio, getSectorExposure, getCorrelation } from '@/api/holdings'
 
 const loading = ref(false)
 const portfolio = ref({})
+const sectorLoading = ref(false)
+const corrLoading = ref(false)
+const sectors = ref([])
+const corrData = ref([])
+const corrCodes = ref([])
+const corrError = ref('')
+
+function getCorr(c1, c2) {
+  const row = corrData.value.find(r => r.code === c1)
+  return row ? row[c2] : 0
+}
+
+function corrColor(v) {
+  const a = Math.abs(v)
+  if (a > 0.6) return '#f56c6c30'
+  if (a > 0.3) return '#e6a23c30'
+  return '#67c23a30'
+}
 
 async function fetchPortfolio() {
   loading.value = true
@@ -112,8 +179,44 @@ async function fetchPortfolio() {
   }
 }
 
+async function fetchSectors() {
+  sectorLoading.value = true
+  try {
+    const res = await getSectorExposure()
+    sectors.value = res.data?.sectors || []
+  } catch (e) {
+    sectors.value = []
+  } finally {
+    sectorLoading.value = false
+  }
+}
+
+async function fetchCorrelation() {
+  corrLoading.value = true
+  corrError.value = ''
+  try {
+    const res = await getCorrelation()
+    if (res.data?.error) {
+      corrError.value = res.data.error
+      corrData.value = []
+      corrCodes.value = []
+    } else {
+      corrData.value = res.data?.matrix || []
+      corrCodes.value = res.data?.codes || []
+    }
+  } catch (e) {
+    corrError.value = '获取失败'
+    corrData.value = []
+    corrCodes.value = []
+  } finally {
+    corrLoading.value = false
+  }
+}
+
 onMounted(() => {
   fetchPortfolio()
+  fetchSectors()
+  fetchCorrelation()
 })
 </script>
 

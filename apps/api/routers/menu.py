@@ -201,6 +201,36 @@ def get_default_menu(role: str = "user") -> Dict[str, Any]:
                         "permission": ["selections:view"],
                         "title": "新闻选股",
                         "treeHidden": True
+                    },
+                    {
+                        "action": 3,
+                        "catalogue_id": "selections_backtest",
+                        "feature_id": "selections.backtest",
+                        "hidden": False,
+                        "icon": "icon-dataanalysis",
+                        "id": "backtestDashboard",
+                        "isTree": True,
+                        "is_prms": True,
+                        "module": "selections.backtest",
+                        "path": "/backtest",
+                        "permission": ["holdings:view"],
+                        "title": "策略回测",
+                        "treeHidden": True
+                    },
+                    {
+                        "action": 3,
+                        "catalogue_id": "selections_paper",
+                        "feature_id": "selections.paper",
+                        "hidden": False,
+                        "icon": "icon-trendcharts",
+                        "id": "paperTrading",
+                        "isTree": True,
+                        "is_prms": True,
+                        "module": "selections.paper",
+                        "path": "/paper-trading",
+                        "permission": ["holdings:view"],
+                        "title": "模拟盘",
+                        "treeHidden": True
                     }
                 ]
             },

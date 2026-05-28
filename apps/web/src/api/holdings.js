@@ -82,3 +82,13 @@ export function getAllHoldings(page = 1, pageSize = 20) {
 export function getAllRealizedPnl() {
   return http.get('/holdings/pnl/admin')
 }
+
+export function getSectorExposure() {
+  const userId = getUserIdOrDefault()
+  return http.get(`/holdings/${userId}/sector-exposure`)
+}
+
+export function getCorrelation() {
+  const userId = getUserIdOrDefault()
+  return http.get(`/holdings/${userId}/correlation`)
+}

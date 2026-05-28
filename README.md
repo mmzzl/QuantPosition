@@ -109,12 +109,27 @@ Docker 环境下使用 `config.docker.yaml`（MongoDB/Redis 指向容器名）�
 ### 交易规则
 - 可视化条件构建器，点击变量和运算符拼装条件
 - 规则类型：买入 / 卖出 / 风控
+- 条件测试：实时验证条件语法和执行结果
 - 引擎读取持仓 + 选股候选池，触发后推送钉钉机器人
 - 同股票同规则同日不重复告警
+
+### 规则探索
+- **模板搜索**：基于指标组合网格搜索生成候选规则
+- **LLM 生成**：调用大模型批量生成交易规则
+- **遗传算法**：多轮进化优化规则参数
+- **回测验证**：自动回测评分，筛选高分规则
+- 候选规则管理：查看、验证、应用、黑名单
+
+### 策略回测
+- 基于 Backtrader 的规则驱动回测引擎
+- 支持自定义规则、抽样股票数量、手续费率
+- 实时进度展示（MongoDB 存储，按任务隔离）
+- 输出：胜率、夏普比率、盈亏比、最大回撤、出场方式统计
 
 ### 系统管理
 - 用户管理、角色管理、权限管理
 - 系统设置：网站名称、Logo、备案信息、Session 过期时间、站点开关、时区格式、钉钉配置
+- LLM 配置：API 地址、API Key、模型名称、批量生成条数（规则探索用）
 
 ### 新闻浏览
 - 按时间筛选新闻，展示标题、摘要、关联板块
@@ -150,5 +165,13 @@ CSV 数据文件位于 `apps/api/data/`：
 | `POST /selections/dual-ma` | 触发双均线选股 |
 | `POST /news-selection/run` | 触发新闻选股 |
 | `GET /rules` | 交易规则 CRUD |
+| `POST /rules/validate` | 规则条件校验 |
+| `POST /rules/explore` | 启动规则探索 |
+| `GET /rules/explore/status` | 探索进度 |
+| `GET /rules/candidates` | 候选规则列表 |
+| `POST /rules/validate-candidates` | 验证候选规则 |
+| `POST /backtest/run` | 运行策略回测 |
+| `GET /backtest/task/{id}` | 回测任务进度 |
+| `GET /backtest/latest` | 最新回测结果 |
 | `GET /settings` | 系统设置（需管理员） |
 | `PUT /settings` | 更新系统设置 |

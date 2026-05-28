@@ -27,7 +27,11 @@ DEFAULTS = {
     "time_format": "HH:mm:ss",
     "session_expire_minutes": 30,
     "dingtalk_webhook": "",
-    "dingtalk_secret": ""
+    "dingtalk_secret": "",
+    "llm_api_url": "https://api.openai.com/v1",
+    "llm_api_key": "",
+    "llm_model": "gpt-4o-mini",
+    "llm_batch_size": 100,
 }
 
 
@@ -63,6 +67,10 @@ class SystemSettings(BaseModel):
     session_expire_minutes: Optional[int] = None
     dingtalk_webhook: Optional[str] = None
     dingtalk_secret: Optional[str] = None
+    llm_api_url: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_batch_size: Optional[int] = None
 
 
 @router.get("")
