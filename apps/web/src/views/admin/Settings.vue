@@ -98,6 +98,22 @@
         <el-input v-model="form.dingtalk_secret" placeholder="SEC...（留空则不签名）" />
       </el-form-item>
 
+      <!-- LLM 配置 -->
+      <el-divider content-position="left">LLM 配置（规则探索用）</el-divider>
+      <el-form-item label="API 地址">
+        <el-input v-model="form.llm_api_url" placeholder="https://api.openai.com/v1" />
+      </el-form-item>
+      <el-form-item label="API Key">
+        <el-input v-model="form.llm_api_key" type="password" show-password placeholder="sk-xxx" />
+      </el-form-item>
+      <el-form-item label="模型名称">
+        <el-input v-model="form.llm_model" placeholder="gpt-4o-mini" />
+      </el-form-item>
+        <el-form-item label="每次生成条数">
+          <el-input-number v-model="form.llm_batch_size" :min="10" :max="200" />
+          <span class="hint">每次调用 LLM 返回的规则条数（10~200）</span>
+        </el-form-item>
+
       <!-- Session -->
       <el-divider content-position="left">会话</el-divider>
       <el-form-item label="Session 过期时间">
@@ -139,7 +155,11 @@ const form = ref({
   time_format: 'HH:mm:ss',
   session_expire_minutes: 30,
   dingtalk_webhook: '',
-  dingtalk_secret: ''
+  dingtalk_secret: '',
+  llm_api_url: 'https://api.openai.com/v1',
+  llm_api_key: '',
+  llm_model: 'gpt-4o-mini',
+  llm_batch_size: 100,
 })
 
 const siteOpen = computed({

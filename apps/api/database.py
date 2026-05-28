@@ -57,6 +57,15 @@ def _ensure_indexes(db):
     db.paper_positions.create_index([("status", ASCENDING)])
     db.paper_positions.create_index([("created_at", -1)])
 
+    # Rule candidates collection indexes
+    db.rule_candidates.create_index("validated")
+    db.rule_candidates.create_index("source")
+    db.rule_candidates.create_index("composite_score")
+    db.rule_candidates.create_index("condition_normalized")
+
+    # Rule blacklist collection indexes
+    db.rule_blacklist.create_index("condition_normalized")
+
 
 def query_sort_end(colletion, sort_end = ''):
     """查询数据库中最新的新闻的realSort作为sortEnd"""

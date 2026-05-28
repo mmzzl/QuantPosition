@@ -106,11 +106,17 @@ class StockRuleEngine:
             "vol": stock_data.get("volume", 0),
             "ma5": stock_data.get("ma5", 0),
             "ma10": stock_data.get("ma10", 0),
+            "ma20": stock_data.get("ma20", 0),
+            "ma60": stock_data.get("ma60", 0),
             "ma5_vol": stock_data.get("ma5_vol", 0),
             "last_close": stock_data.get("last_close", 0),
             "high": stock_data.get("high", 0),
             "low": stock_data.get("low", 0),
             "open": stock_data.get("open", 0),
+            "rsi": stock_data.get("rsi", 50),
+            "atr": stock_data.get("atr", 0),
+            "adx": stock_data.get("adx", 0),
+            "amplitude": stock_data.get("amplitude", 0),
             "has_pos": position.get("has_pos", False),
             "cost": position.get("cost", 0),
             "buy_date": buy_date_num,
@@ -205,17 +211,56 @@ def run_rules_for_holdings():
 
         closes = [k["close"] for k in klines]
         volumes = [k["volume"] for k in klines]
+        highs = [k["high"] for k in klines]
+        lows = [k["low"] for k in klines]
+
+        # 计算指标
+        def sma(data, n):
+            return sum(data[-n:]) / n if len(data) >= n else data[-1]
+
+        def calc_rsi(prices, period=14):
+            if len(prices) < period + 1:
+                return 50
+            deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+            gains = [d if d > 0 else 0 for d in deltas[-period:]]
+            losses = [-d if d < 0 else 0 for d in deltas[-period:]]
+            avg_gain = sum(gains) / period
+            avg_loss = sum(losses) / period
+            if avg_loss == 0:
+                return 100
+            rs = avg_gain / avg_loss
+            return 100 - (100 / (1 + rs))
+
+        def calc_atr(highs, lows, closes, period=14):
+            if len(closes) < period + 1:
+                return (highs[-1] - lows[-1]) if (highs[-1] - lows[-1]) > 0 else 0
+            trs = []
+            for i in range(1, len(highs)):
+                tr = max(highs[i] - lows[i],
+                         abs(highs[i] - closes[i-1]),
+                         abs(lows[i] - closes[i-1]))
+                trs.append(tr)
+            return sum(trs[-period:]) / period
+
+        last_close = closes[-1]
+        amplitude = (highs[-1] - lows[-1]) / last_close if last_close > 0 else 0
 
         stock_data = {
-            "close": closes[-1],
+            "close": last_close,
             "volume": volumes[-1],
-            "ma5": sum(closes[-5:]) / 5 if len(closes) >= 5 else closes[-1],
-            "ma10": sum(closes[-10:]) / 10 if len(closes) >= 10 else closes[-1],
-            "ma5_vol": sum(volumes[-5:]) / 5 if len(volumes) >= 5 else volumes[-1],
+            "ma5": sma(closes, 5),
+            "ma10": sma(closes, 10),
+            "ma20": sma(closes, 20),
+            "ma60": sma(closes, 60),
+            "ma5_vol": sma(volumes, 5),
             "last_close": closes[-2] if len(closes) >= 2 else closes[-1],
-            "high": max(k["high"] for k in klines[-20:]),
-            "low": min(k["low"] for k in klines[-20:]),
+            "high": max(highs[-20:]),
+            "low": min(lows[-20:]),
             "open": klines[-1].get("open", 0),
+            "rsi": calc_rsi(closes),
+            "atr": calc_atr(highs, lows, closes),
+            "adx": 25,  # ADX 计算复杂，默认 25（回测中用 backtrader 计算精确值）
+            "amplitude": amplitude,
         }
 
         stock_data["name"] = (

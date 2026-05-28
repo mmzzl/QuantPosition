@@ -32,4 +32,5 @@ from tasks import selection_tasks  # noqa
 from tasks import news_selection_tasks  # noqa
 from tasks import kline_tasks  # noqa
 from tasks import backtest_tasks  # noqa
+from tasks import rule_explore_tasks  # noqa
 Log("celery", log_type=Log.TYPE_FILE, level=logging.INFO)

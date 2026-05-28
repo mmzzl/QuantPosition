@@ -3,6 +3,8 @@
     <div class="page-header">
       <h2>交易规则</h2>
       <div>
+        <el-button type="success" @click="goCandidates">候选规则</el-button>
+        <el-button type="warning" :loading="exploring" @click="handleExplore">规则探索</el-button>
         <el-button type="danger" :disabled="!selectedIds.length" @click="handleBatchDelete">
           批量删除 ({{ selectedIds.length }})
         </el-button>
@@ -105,6 +107,12 @@
               :rows="4"
               placeholder="点击上方变量和运算符构建条件"
             />
+            <div style="margin-top: 8px; display: flex; align-items: center; gap: 12px;">
+              <el-button size="small" type="success" :loading="testing" @click="testCondition">测试条件</el-button>
+              <span v-if="testResult" :style="{ color: testResult.valid ? '#67c23a' : '#f56c6c', fontSize: '13px' }">
+                {{ testResult.valid ? `通过，返回: ${testResult.result}` : `失败: ${testResult.error}` }}
+              </span>
+            </div>
           </div>
         </el-form-item>
         <el-form-item label="启用">
@@ -122,10 +130,15 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getRules, createRule, updateRule, deleteRule, batchDeleteRules } from '@/api/rules'
+import { getRules, createRule, updateRule, deleteRule, batchDeleteRules, validateCondition as validateConditionApi, startExplore } from '@/api/rules'
+import { useRouter } from 'vue-router'
 
+const router = useRouter()
 const loading = ref(false)
 const saving = ref(false)
+const testing = ref(false)
+const exploring = ref(false)
+const testResult = ref(null)
 const conditionRef = ref(null)
 
 const varGroups = [
@@ -134,11 +147,19 @@ const varGroups = [
     { name: 'vol', desc: '最新成交量' },
     { name: 'ma5', desc: '5日均线' },
     { name: 'ma10', desc: '10日均线' },
+    { name: 'ma20', desc: '20日均线（中期趋势）' },
+    { name: 'ma60', desc: '60日均线（长期趋势）' },
     { name: 'ma5_vol', desc: '5日均量' },
     { name: 'last_close', desc: '前一日收盘价' },
     { name: 'high', desc: '20日最高价' },
     { name: 'low', desc: '20日最低价' },
     { name: 'open', desc: '今日开盘价' },
+    { name: 'amplitude', desc: '当日振幅 (high-low)/last_close' },
+  ]},
+  { label: '技术指标', vars: [
+    { name: 'rsi', desc: 'RSI相对强弱 (0~100，>70超买，<30超卖)' },
+    { name: 'atr', desc: 'ATR真实波动幅度（动态止损用）' },
+    { name: 'adx', desc: 'ADX趋势强度 (>25趋势明确，<20震荡)' },
   ]},
   { label: '持仓数据', vars: [
     { name: 'has_pos', desc: '是否持仓 (true/false)' },
@@ -149,6 +170,22 @@ const varGroups = [
 ]
 
 const operators = ['>', '<', '>=', '<=', '==', '!=', 'and', 'or', 'not', '*', '/', '+', '-', '(', ')']
+
+function goCandidates() {
+  router.push('/candidates')
+}
+
+async function handleExplore() {
+  exploring.value = true
+  try {
+    const res = await startExplore()
+    ElMessage.success(res.data.message)
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '启动失败')
+  } finally {
+    exploring.value = false
+  }
+}
 
 function insertVar(text) {
   const el = conditionRef.value?.textarea
@@ -185,6 +222,7 @@ function openDialog(row) {
     editing.value = false
     form.value = { name: '', type: 'buy', priority: 3, weight: 0.35, condition: '', enabled: true }
   }
+  testResult.value = null
   dialogVisible.value = true
 }
 
@@ -203,7 +241,7 @@ async function fetchRules() {
 }
 
 const ALLOWED_VARS = ['price', 'vol', 'ma5', 'ma10', 'ma5_vol', 'last_close', 'high', 'low', 'open', 'has_pos', 'cost', 'buy_date', 'today']
-const FORBIDDEN = ['import', 'exec', 'eval', 'open', 'os', 'sys', 'subprocess', '__import__', '__builtins__', '__class__', 'getattr', 'setattr', 'globals', 'locals', 'compile', 'breakpoint']
+const FORBIDDEN = ['import', 'exec', 'eval', 'os', 'sys', 'subprocess', '__import__', '__builtins__', '__class__', 'getattr', 'setattr', 'globals', 'locals', 'compile', 'breakpoint']
 
 function validateCondition(cond) {
   if (!cond || !cond.trim()) return '条件不能为空'
@@ -214,6 +252,23 @@ function validateCondition(cond) {
     if (!ALLOWED_VARS.includes(w) && !['and', 'or', 'not', 'True', 'False', 'none', 'None'].includes(w) && !/^\d+$/.test(w)) return `未知变量: ${w}`
   }
   return null
+}
+
+async function testCondition() {
+  if (!form.value.condition || !form.value.condition.trim()) {
+    ElMessage.warning('请先输入条件')
+    return
+  }
+  testing.value = true
+  testResult.value = null
+  try {
+    const res = await validateConditionApi(form.value.condition)
+    testResult.value = res.data
+  } catch (e) {
+    testResult.value = { valid: false, error: e.response?.data?.detail || '请求失败' }
+  } finally {
+    testing.value = false
+  }
 }
 
 async function saveRule() {
