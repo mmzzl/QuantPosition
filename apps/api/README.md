@@ -87,6 +87,23 @@ db.users.insertOne({
 - `GET /users` - 用户列表
 - `GET /roles` - 角色列表
 
+### 交易规则
+- `GET /rules` - 规则列表
+- `POST /rules` - 创建规则
+- `PUT /rules/{rule_id}` - 更新规则
+- `DELETE /rules/{rule_id}` - 删除规则
+- `POST /rules/validate` - 条件校验
+- `POST /rules/explore` - 启动规则探索
+- `GET /rules/explore/status` - 探索进度
+- `GET /rules/candidates` - 候选规则列表
+- `POST /rules/validate-candidates` - 验证候选规则
+- `POST /rules/apply-candidates` - 应用候选规则
+
+### 策略回测
+- `POST /backtest/run` - 运行回测（异步任务）
+- `GET /backtest/task/{task_id}` - 查询任务进度
+- `GET /backtest/latest` - 最新回测结果
+
 ## 依赖检查
 
 - **MongoDB**: 运行在 `localhost:27017`，数据库 `eastmoney_news`
