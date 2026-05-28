@@ -24,14 +24,19 @@ def run_simple_backtest(
     days_back: int = 180,
     initial_cash: float = 100000,
     commission: float = 0.001,
+    max_stocks: int = 500,
 ) -> Dict[str, Any]:
 
-    self.update_state(state="PROGRESS", meta={"current": 0, "total": 0, "status": "加载规则..."})
+    db = get_db()
+    task_id = self.request.id
+    db.backtest_progress.update_one(
+        {"_id": task_id},
+        {"$set": {"current": 0, "total": 0, "status": "初始化...", "detail": "", "updated_at": datetime.now()}},
+        upsert=True,
+    )
 
     start = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
     end = datetime.now().strftime("%Y-%m-%d")
-
-    self.update_state(state="PROGRESS", meta={"current": 0, "total": 0, "status": "回测中..."})
 
     result = run_backtest(
         strategy_name=strategy,
@@ -39,6 +44,9 @@ def run_simple_backtest(
         end_date=end,
         initial_cash=initial_cash,
         commission=commission,
+        max_stocks=max_stocks,
+        celery_task=self,
+        task_id=task_id,
     )
 
     _save(strategy, result)

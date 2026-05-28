@@ -12,6 +12,7 @@ async def submit_backtest(
     days_back: int = Query(180, ge=30, le=730),
     initial_cash: float = Query(100000, ge=10000),
     commission: float = Query(0.001, ge=0, le=0.05),
+    max_stocks: int = Query(500, ge=0, le=5000),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     try:
@@ -19,6 +20,7 @@ async def submit_backtest(
             days_back=days_back,
             initial_cash=initial_cash,
             commission=commission,
+            max_stocks=max_stocks,
         )
         return {"task_id": task.id}
     except Exception as e:
@@ -32,10 +34,17 @@ async def get_task_status(task_id: str, current_user: AuthenticatedUser = Depend
     resp = {"task_id": task_id, "status": r.status}
     if r.status == "SUCCESS":
         resp["result"] = r.result
-    elif r.status == "PROGRESS":
-        resp["progress"] = r.info
     elif r.status == "FAILURE":
         resp["error"] = str(r.result)
+    else:
+        db = get_db()
+        prog = db.backtest_progress.find_one({"_id": task_id})
+        if prog:
+            prog.pop("_id", None)
+            prog.pop("updated_at", None)
+            resp["progress"] = prog
+        else:
+            resp["progress"] = {"current": 0, "total": 0, "status": "等待中...", "detail": ""}
     return resp
 
 
