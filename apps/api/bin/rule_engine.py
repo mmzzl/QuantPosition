@@ -125,11 +125,145 @@ class StockRuleEngine:
         return ctx
 
 
+def calc_sma(data, n):
+    """简单移动平均"""
+    return sum(data[-n:]) / n if len(data) >= n else data[-1]
+
+
+def calc_rsi(prices, period=14):
+    """RSI 相对强弱指标"""
+    if len(prices) < period + 1:
+        return 50
+    deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+    gains = [d if d > 0 else 0 for d in deltas[-period:]]
+    losses = [-d if d < 0 else 0 for d in deltas[-period:]]
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def calc_atr(highs, lows, closes, period=14):
+    """ATR 真实波动幅度"""
+    if len(closes) < period + 1:
+        return (highs[-1] - lows[-1]) if (highs[-1] - lows[-1]) > 0 else 0
+    trs = []
+    for i in range(1, len(highs)):
+        tr = max(highs[i] - lows[i],
+                 abs(highs[i] - closes[i-1]),
+                 abs(lows[i] - closes[i-1]))
+        trs.append(tr)
+    return sum(trs[-period:]) / period
+
+
+def load_stock_klines(db, codes, days=60):
+    """批量加载K线数据"""
+    now = datetime.now()
+    start_str = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+    end_str = now.strftime("%Y-%m-%d") + " 23:59"
+    klines_raw = list(db.stock_kline.find({
+        "code": {"$in": codes},
+        "frequency": 9,
+        "date": {"$gte": start_str, "$lte": end_str}
+    }).sort("date", 1))
+    stock_klines = {}
+    for k in klines_raw:
+        stock_klines.setdefault(k["code"], []).append(k)
+    return stock_klines
+
+
+def build_stock_indicators(klines):
+    """从K线数据计算技术指标，返回 stock_data 字典"""
+    closes = [k["close"] for k in klines]
+    volumes = [k["volume"] for k in klines]
+    highs = [k["high"] for k in klines]
+    lows = [k["low"] for k in klines]
+
+    last_close = closes[-1]
+    atr = calc_atr(highs, lows, closes)
+    amplitude = (highs[-1] - lows[-1]) / last_close if last_close > 0 else 0
+
+    return {
+        "close": last_close,
+        "volume": volumes[-1],
+        "ma5": calc_sma(closes, 5),
+        "ma10": calc_sma(closes, 10),
+        "ma20": calc_sma(closes, 20),
+        "ma60": calc_sma(closes, 60),
+        "ma5_vol": calc_sma(volumes, 5),
+        "last_close": closes[-2] if len(closes) >= 2 else closes[-1],
+        "high": max(highs[-20:]),
+        "low": min(lows[-20:]),
+        "open": klines[-1].get("open", 0),
+        "rsi": calc_rsi(closes),
+        "atr": atr,
+        "adx": 25,
+        "amplitude": amplitude,
+    }, atr
+
+
+def filter_trend_up(db, exclude_codes=None):
+    """全市场扫描，排除ST，双均线过滤趋势向上（MA5 > MA10 且 MA5 上升）"""
+    exclude_codes = exclude_codes or set()
+
+    # 获取所有非ST股票代码
+    name_map = {}
+    for s in db.sector_stocks.find({}, {"stock_code": 1, "stock_name": 1}):
+        code = s.get("stock_code", "").split(".")[-1]
+        name = s.get("stock_name", "")
+        if code:
+            name_map[code] = name
+
+    all_codes = db.stock_kline.distinct("code", {"frequency": 9})
+    non_st = [c for c in all_codes
+              if c not in exclude_codes
+              and not name_map.get(c, "").startswith(("ST", "*ST"))]
+
+    logging.info(f"[RULE_ENGINE] 全市场非ST股票: {len(non_st)} 只")
+
+    # 批量加载K线
+    stock_klines = load_stock_klines(db, non_st)
+
+    # 双均线过滤：MA5 > MA10 且 MA5 连续3天上升
+    trend_up = []
+    for code, klines in stock_klines.items():
+        if len(klines) < 20:
+            continue
+        closes = [k["close"] for k in klines]
+        ma5_now = calc_sma(closes, 5)
+        ma10_now = calc_sma(closes, 10)
+        # MA5 > MA10 表示短期趋势向上
+        if ma5_now <= ma10_now:
+            continue
+        # 检查 MA5 是否在上升（最近3天）
+        if len(closes) >= 8:
+            ma5_3d_ago = sum(closes[-8:-3]) / 5
+            if ma5_now <= ma5_3d_ago:
+                continue
+        trend_up.append(code)
+
+    logging.info(f"[RULE_ENGINE] 趋势向上（MA5>MA10且上升）: {len(trend_up)} 只")
+    return trend_up, stock_klines, name_map
+
+
+def suggest_prices(stock_data, atr):
+    """基于 ATR 计算建议买入/卖出价格"""
+    close = stock_data["close"]
+    buy_price = round(close - atr, 2)   # 买入价：当前价 - ATR（回调买入）
+    sell_price = round(close + atr, 2)  # 卖出价：当前价 + ATR（止盈目标）
+    stop_loss = round(close - 2 * atr, 2)  # 止损价：当前价 - 2倍ATR
+    return buy_price, sell_price, stop_loss
+
+
 def run_rules_for_holdings():
     """从 MongoDB 获取持仓和 K 线数据，执行所有启用规则
 
     持仓 → has_pos=True（评估卖出/风控）
-    选股候选池 → has_pos=False（评估买入）
+    全市场 → 排除ST → 双均线过滤 → has_pos=False（评估买入）
+
+    买入信号按评分排序，只推送最高分的那只
     """
     import sys
     import os
@@ -149,125 +283,51 @@ def run_rules_for_holdings():
     # 2. 构建持仓池（用于评估卖出/风控）
     holdings = list(db.holdings.find({}))
     holding_codes = set(h["code"] for h in holdings)
+    holding_map = {h["code"]: h for h in holdings}
     logging.info(f"持仓数量: {len(holding_codes)}")
 
-    # 3. 构建买入候选池（用于评估 buy 规则）
-    buy_candidates = {}  # code -> {name, user_id}
+    # 3. 买入候选池：全市场扫描 + 双均线过滤
+    stock_klines_all = {}
+    name_map = {}
     if has_buy_rule:
-        # 从最新的新闻选股缓存拿候选股票
-        cache = list(db.news_selection_cache.find({}).sort("expected_return", -1).limit(100))
-        for c in cache:
-            if c["code"] not in holding_codes:
-                buy_candidates[c["code"]] = {
-                    "name": c.get("name", ""),
-                    "user_id": "system",
-                }
-        # 再从双均线选股结果补充
-        selections = list(db.stock_selections.find(
-            {"strategy": "dual_moving_average"}
-        ).sort("selection_date", -1).limit(100))
-        for s in selections:
-            code = s.get("code", "")
-            if code and code not in holding_codes and code not in buy_candidates:
-                buy_candidates[code] = {
-                    "name": s.get("name", ""),
-                    "user_id": "system",
-                }
-        logging.info(f"买入候选池: {len(buy_candidates)} 只")
+        trend_up_codes, stock_klines_all, name_map = filter_trend_up(db, exclude_codes=holding_codes)
+        logging.info(f"买入候选池: {len(trend_up_codes)} 只（趋势向上，排除持仓）")
+    else:
+        # 没有买入规则时，只需加载持仓股票的K线
+        if holdings:
+            stock_klines_all = load_stock_klines(db, list(holding_codes))
+            for s in db.sector_stocks.find({}, {"stock_code": 1, "stock_name": 1}):
+                code = s.get("stock_code", "").split(".")[-1]
+                if code:
+                    name_map[code] = s.get("stock_name", "")
 
     # 4. 合并所有需要扫描的股票代码
-    all_codes = list(holding_codes | set(buy_candidates.keys()))
+    all_codes = list(holding_codes)
+    if has_buy_rule:
+        all_codes = list(set(all_codes) | set(trend_up_codes))
     if not all_codes:
         logging.info("没有股票需要扫描")
         return
 
-    # 5. 获取 K 线数据（最近 60 天）
-    now = datetime.now()
-    start_str = (now - timedelta(days=60)).strftime("%Y-%m-%d")
-    end_str = now.strftime("%Y-%m-%d") + " 23:59"
-
-    klines_raw = list(db.stock_kline.find({
-        "code": {"$in": all_codes},
-        "frequency": 9,
-        "date": {"$gte": start_str, "$lte": end_str}
-    }).sort("date", 1))
-
-    stock_klines = {}
-    for k in klines_raw:
-        stock_klines.setdefault(k["code"], []).append(k)
+    # 5. 补充持仓股票的K线数据（如果没有加载过）
+    missing_codes = [c for c in holding_codes if c not in stock_klines_all]
+    if missing_codes:
+        extra_klines = load_stock_klines(db, missing_codes)
+        stock_klines_all.update(extra_klines)
 
     engine = StockRuleEngine(rules)
-    triggered_messages = []
+    buy_candidates = []   # 存放所有买入信号，用于排序
+    sell_messages = []    # 存放卖出/风控信号
     pending_alerts = []
 
-    # 6. 构建持仓代码→持仓信息映射
-    holding_map = {h["code"]: h for h in holdings}
-
-    # 7. 执行规则扫描
+    # 6. 执行规则扫描
     for code in all_codes:
-        klines = stock_klines.get(code, [])
-        if not klines:
+        klines = stock_klines_all.get(code, [])
+        if not klines or len(klines) < 20:
             continue
 
-        closes = [k["close"] for k in klines]
-        volumes = [k["volume"] for k in klines]
-        highs = [k["high"] for k in klines]
-        lows = [k["low"] for k in klines]
-
-        # 计算指标
-        def sma(data, n):
-            return sum(data[-n:]) / n if len(data) >= n else data[-1]
-
-        def calc_rsi(prices, period=14):
-            if len(prices) < period + 1:
-                return 50
-            deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
-            gains = [d if d > 0 else 0 for d in deltas[-period:]]
-            losses = [-d if d < 0 else 0 for d in deltas[-period:]]
-            avg_gain = sum(gains) / period
-            avg_loss = sum(losses) / period
-            if avg_loss == 0:
-                return 100
-            rs = avg_gain / avg_loss
-            return 100 - (100 / (1 + rs))
-
-        def calc_atr(highs, lows, closes, period=14):
-            if len(closes) < period + 1:
-                return (highs[-1] - lows[-1]) if (highs[-1] - lows[-1]) > 0 else 0
-            trs = []
-            for i in range(1, len(highs)):
-                tr = max(highs[i] - lows[i],
-                         abs(highs[i] - closes[i-1]),
-                         abs(lows[i] - closes[i-1]))
-                trs.append(tr)
-            return sum(trs[-period:]) / period
-
-        last_close = closes[-1]
-        amplitude = (highs[-1] - lows[-1]) / last_close if last_close > 0 else 0
-
-        stock_data = {
-            "close": last_close,
-            "volume": volumes[-1],
-            "ma5": sma(closes, 5),
-            "ma10": sma(closes, 10),
-            "ma20": sma(closes, 20),
-            "ma60": sma(closes, 60),
-            "ma5_vol": sma(volumes, 5),
-            "last_close": closes[-2] if len(closes) >= 2 else closes[-1],
-            "high": max(highs[-20:]),
-            "low": min(lows[-20:]),
-            "open": klines[-1].get("open", 0),
-            "rsi": calc_rsi(closes),
-            "atr": calc_atr(highs, lows, closes),
-            "adx": 25,  # ADX 计算复杂，默认 25（回测中用 backtrader 计算精确值）
-            "amplitude": amplitude,
-        }
-
-        stock_data["name"] = (
-            holding_map[code].get("name", "")
-            if code in holding_map
-            else buy_candidates.get(code, {}).get("name", "")
-        )
+        stock_data, atr = build_stock_indicators(klines)
+        stock_data["name"] = name_map.get(code, "")
 
         if code in holding_map:
             h = holding_map[code]
@@ -276,56 +336,114 @@ def run_rules_for_holdings():
                 "cost": h.get("average_cost", 0),
                 "buy_date": h["created_at"].date() if isinstance(h.get("created_at"), datetime) else None,
             }
-            user_id = h.get("user_id", "?")
         else:
             position = {"has_pos": False, "cost": 0, "buy_date": None}
-            user_id = buy_candidates.get(code, {}).get("user_id", "system")
 
         ctx = engine.build_context(stock_data, position)
         risk, sell_sc, buy_sc, triggered = engine.run(ctx)
 
-        if triggered:
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            rule_ids = sorted(r["rule_id"] for r in triggered)
-            dedup_key = f"{code}|{today_str}|{rule_ids}"
+        if not triggered:
+            continue
 
-            # 查重：同股票+同日+同规则不重复告警
-            if db.alert_log.find_one({"dedup_key": dedup_key}):
-                logging.info(f"跳过重复告警: {dedup_key}")
-                continue
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        rule_ids = sorted(r["rule_id"] for r in triggered)
+        dedup_key = f"{code}|{today_str}|{rule_ids}"
 
-            rule_names = ", ".join(r["name"] for r in triggered)
-            status = "🚨 风控" if risk else "📈 买入" if buy_sc > 0 else "📉 卖出"
+        # 查重：同股票+同日+同规则不重复告警
+        if db.alert_log.find_one({"dedup_key": dedup_key}):
+            logging.info(f"跳过重复告警: {dedup_key}")
+            continue
+
+        rule_names = ", ".join(r["name"] for r in triggered)
+        buy_price, sell_price, stop_loss = suggest_prices(stock_data, atr)
+
+        if risk:
+            # 风控信号：立即推送
             msg = (
-                f"{status} **{code}** {stock_data.get('name', '')}\n"
+                f"🚨 **风控预警** {code} {stock_data['name']}\n"
                 f"**触发规则**: {rule_names}\n"
-                f"**卖出分**: {sell_sc:.2f} | **买入分**: {buy_sc:.2f}\n"
                 f"**当前价**: {stock_data['close']:.2f} | **成本**: {position['cost']:.2f}\n"
-                f"**均线**: MA5={stock_data['ma5']:.2f} MA10={stock_data['ma10']:.2f}\n"
+                f"**止损价**: {stop_loss:.2f} | **ATR**: {atr:.2f}\n"
+                f"**风险提示**: 请立即评估是否需要止损\n"
             )
-            if risk:
-                msg = f"🚨 **风控触发**\n" + msg
-
-            triggered_messages.append(msg)
+            sell_messages.append(msg)
             pending_alerts.append({
-                "dedup_key": dedup_key,
-                "code": code,
-                "date": today_str,
-                "rule_ids": rule_ids,
-                "rule_names": rule_names,
-                "trigger_type": "risk" if risk else ("buy" if buy_sc > 0 else "sell"),
-                "sell_score": round(sell_sc, 2),
-                "buy_score": round(buy_sc, 2),
-                "price": stock_data["close"],
-                "cost": position["cost"],
-                "message": msg,
+                "dedup_key": dedup_key, "code": code, "date": today_str,
+                "rule_ids": rule_ids, "rule_names": rule_names,
+                "trigger_type": "risk", "sell_score": round(sell_sc, 2),
+                "buy_score": 0, "price": stock_data["close"],
+                "cost": position["cost"], "message": msg,
                 "created_at": datetime.now(),
             })
+        elif sell_sc > 0 and position.get("has_pos"):
+            # 卖出信号
+            pnl_pct = round((stock_data["close"] - position["cost"]) / position["cost"] * 100, 2) if position["cost"] > 0 else 0
+            msg = (
+                f"📉 **卖出信号** {code} {stock_data['name']}\n"
+                f"**触发规则**: {rule_names}\n"
+                f"**卖出评分**: {sell_sc:.2f}\n"
+                f"**当前价**: {stock_data['close']:.2f} | **成本**: {position['cost']:.2f} | **盈亏**: {pnl_pct:+.2f}%\n"
+                f"**建议卖出价**: {sell_price:.2f} | **ATR**: {atr:.2f}\n"
+            )
+            sell_messages.append(msg)
+            pending_alerts.append({
+                "dedup_key": dedup_key, "code": code, "date": today_str,
+                "rule_ids": rule_ids, "rule_names": rule_names,
+                "trigger_type": "sell", "sell_score": round(sell_sc, 2),
+                "buy_score": 0, "price": stock_data["close"],
+                "cost": position["cost"], "message": msg,
+                "created_at": datetime.now(),
+            })
+        elif buy_sc > 0 and not position.get("has_pos"):
+            # 买入信号：收集起来后面排序
+            buy_candidates.append({
+                "code": code,
+                "name": stock_data["name"],
+                "buy_score": buy_sc,
+                "price": stock_data["close"],
+                "atr": atr,
+                "buy_price": buy_price,
+                "sell_price": sell_price,
+                "stop_loss": stop_loss,
+                "rule_names": rule_names,
+                "rule_ids": rule_ids,
+                "dedup_key": dedup_key,
+                "stock_data": stock_data,
+                "triggered": triggered,
+            })
+
+    # 7. 买入信号排序，只保留最高分
+    if buy_candidates:
+        buy_candidates.sort(key=lambda x: x["buy_score"], reverse=True)
+        best = buy_candidates[0]
+
+        msg = (
+            f"📈 **买入信号** {best['code']} {best['name']}\n"
+            f"**买入评分**: {best['buy_score']:.2f}（候选 {len(buy_candidates)} 只，取最高分）\n"
+            f"**触发规则**: {best['rule_names']}\n"
+            f"**当前价**: {best['price']:.2f}\n"
+            f"**建议买入价**: {best['buy_price']:.2f}（当前价 - ATR）\n"
+            f"**目标卖出价**: {best['sell_price']:.2f}（当前价 + ATR）\n"
+            f"**止损价**: {best['stop_loss']:.2f}（当前价 - 2倍ATR）\n"
+            f"**ATR**: {best['atr']:.2f}\n"
+            f"**风险提示**: 建议分批买入，单只仓位不超过总资金10%\n"
+        )
+
+        sell_messages.append(msg)
+        pending_alerts.append({
+            "dedup_key": best["dedup_key"], "code": best["code"],
+            "date": today_str, "rule_ids": best["rule_ids"],
+            "rule_names": best["rule_names"], "trigger_type": "buy",
+            "sell_score": 0, "buy_score": round(best["buy_score"], 2),
+            "price": best["price"], "cost": 0, "message": msg,
+            "created_at": datetime.now(),
+        })
+        logging.info(f"最高分买入信号: {best['code']} {best['name']} score={best['buy_score']:.2f}（共 {len(buy_candidates)} 只候选）")
 
     # 8. 推送钉钉，成功后才写告警日志
     if pending_alerts:
-        title = f"交易规则触发通知 ({len(pending_alerts)} 条)"
-        content = "\n---\n".join(triggered_messages)
+        title = f"交易规则触发 ({len(pending_alerts)} 条)"
+        content = "\n---\n".join(sell_messages)
         if send_dingtalk_message(title, content):
             for doc in pending_alerts:
                 db.alert_log.insert_one(doc)
