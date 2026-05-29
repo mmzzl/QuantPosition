@@ -34,6 +34,8 @@ def send_dingtalk_message(title: str, content: str):
             logging.warning("钉钉 webhook 未配置")
             return False
 
+        logging.info(f"钉钉 webhook URL: {webhook[:60]}... (长度: {len(webhook)})")
+
         timestamp = str(round(time.time() * 1000))
         if secret:
             sign_str = f"{timestamp}\n{secret}"
@@ -49,6 +51,12 @@ def send_dingtalk_message(title: str, content: str):
                 "text": f"## {title}\n\n{content}"
             }
         }
+        import json as _json
+        body_size = len(_json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        logging.info(f"钉钉推送 payload 大小: {body_size} bytes")
+        if body_size > 19000:
+            logging.warning(f"payload 过大 ({body_size} bytes)，截断内容")
+            payload["markdown"]["text"] = payload["markdown"]["text"][:18000] + "\n\n...(内容过长已截断)"
         resp = requests.post(webhook, json=payload, timeout=5)
         result = resp.json()
         logging.info(f"钉钉推送结果: {result}")
