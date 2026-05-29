@@ -227,7 +227,8 @@ def filter_trend_up(db, exclude_codes=None):
     all_codes = db.stock_kline.distinct("code", {"frequency": 9})
     non_st = [c for c in all_codes
               if c not in exclude_codes
-              and not name_map.get(c, "").startswith(("ST", "*ST"))]
+              and not name_map.get(c, "").startswith(("ST", "*ST"))
+              and not c.startswith(("300", "301", "688"))]  # 排除创业板和科创板
 
     logging.info(f"[RULE_ENGINE] 全市场非ST股票: {len(non_st)} 只")
 
