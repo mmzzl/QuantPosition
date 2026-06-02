@@ -17,6 +17,7 @@ import SectorHeatmap from '@/views/sectors/Heatmap.vue'
 import SectorStockList from '@/views/sectors/StockList.vue'
 import DualMASelection from '@/views/selections/DualMA.vue'
 import NewsSelection from '@/views/selections/NewsSelection.vue'
+import HeatmapSelection from '@/views/selections/HeatmapSelection.vue'
 import NewsView from '@/views/NewsView.vue'
 import TradingRules from '@/views/TradingRules.vue'
 import RuleCandidates from '@/views/RuleCandidates.vue'
@@ -124,6 +125,12 @@ const routes = [
         name: 'NewsSelection',
         component: NewsSelection,
         meta: { requiresAdmin: true, title: '新闻选股', permission: 'selections:view', menuPath: '/selections/news' }
+      },
+      {
+        path: 'selections/heatmap',
+        name: 'HeatmapSelection',
+        component: HeatmapSelection,
+        meta: { title: '热力图选股', permission: 'selections:view', menuPath: '/selections/heatmap' }
       },
       {
         path: 'news',

@@ -15,16 +15,20 @@
             <el-option label="365 天" :value="365" />
           </el-select>
         </el-col>
-        <el-col :span="5">
+        <el-col :span="4">
           <div class="label">初始资金</div>
           <el-input-number v-model="cash" :min="10000" :step="10000" style="width:100%" />
         </el-col>
-        <el-col :span="5">
+        <el-col :span="4">
           <div class="label">手续费率</div>
           <el-input-number v-model="commission" :min="0" :max="0.05" :step="0.0005" :precision="4" style="width:100%" />
         </el-col>
-        <el-col :span="5">
-          <div class="label">股票数量</div>
+        <el-col :span="4">
+          <div class="label">最大持仓</div>
+          <el-input-number v-model="maxPositions" :min="1" :max="20" style="width:100%" />
+        </el-col>
+        <el-col :span="4">
+          <div class="label">候选股票数</div>
           <el-select v-model="maxStocks" style="width:100%">
             <el-option label="100 只（快速）" :value="100" />
             <el-option label="300 只" :value="300" />
@@ -32,7 +36,7 @@
             <el-option label="全市场" :value="0" />
           </el-select>
         </el-col>
-        <el-col :span="4">
+        <el-col :span="3">
           <div class="label">&nbsp;</div>
           <el-button @click="run" type="primary" :loading="running" style="width:100%">运行回测</el-button>
         </el-col>
@@ -51,16 +55,17 @@
 
     <template v-if="result">
       <el-row :gutter="16">
-        <el-col :span="6"><el-card :class="cls(result.avg_return)" class="stat"><div class="t">平均收益</div><div class="v">{{ result.avg_return }}%</div></el-card></el-col>
-        <el-col :span="6"><el-card class="stat"><div class="t">胜率</div><div class="v" :class="result.win_rate>=50?'profit':'loss'">{{ result.win_rate }}%</div><div class="m">{{ result.trades }} 笔交易 | {{ result.unique_stocks || result.processed }} 只股票</div></el-card></el-col>
-        <el-col :span="6"><el-card class="stat"><div class="t">盈亏比</div><div class="v" :class="result.profit_factor>=1.5?'profit':'loss'">{{ result.profit_factor }}</div><div class="m">赢{{ result.avg_win }}% / 亏{{ result.avg_loss }}%</div></el-card></el-col>
-        <el-col :span="6"><el-card class="stat"><div class="t">夏普 / 回撤</div><div class="v" :class="result.sharpe>=1?'profit':'loss'">{{ result.sharpe }}</div><div class="m">最大回撤 {{ result.max_drawdown }}%</div></el-card></el-col>
+        <el-col :span="6"><el-card :class="cls(result.portfolio_return)" class="stat"><div class="t">组合收益</div><div class="v">{{ result.portfolio_return }}%</div><div class="m">{{ result.trades }} 笔交易 | {{ result.unique_stocks || result.processed }} 只股票</div></el-card></el-col>
+        <el-col :span="4"><el-card :class="cls(result.avg_return)" class="stat"><div class="t">平均单笔</div><div class="v">{{ result.avg_return }}%</div></el-card></el-col>
+        <el-col :span="4"><el-card class="stat"><div class="t">胜率</div><div class="v" :class="result.win_rate>=50?'profit':'loss'">{{ result.win_rate }}%</div></el-card></el-col>
+        <el-col :span="5"><el-card class="stat"><div class="t">盈亏比</div><div class="v" :class="result.profit_factor>=1.5?'profit':'loss'">{{ result.profit_factor }}</div><div class="m">赢{{ result.avg_win }}% / 亏{{ result.avg_loss }}%</div></el-card></el-col>
+        <el-col :span="5"><el-card class="stat"><div class="t">夏普</div><div class="v" :class="result.sharpe>=1?'profit':'loss'">{{ result.sharpe }}</div></el-card></el-col>
       </el-row>
 
       <el-row :gutter="16" style="margin-top:16px">
-        <el-col :span="6"><el-card :class="cls(result.total_return)" class="stat"><div class="t">总收益</div><div class="v">{{ result.total_return }}%</div></el-card></el-col>
-        <el-col :span="6"><el-card class="stat"><div class="t">最佳</div><div class="v profit">{{ result.best }}%</div></el-card></el-col>
-        <el-col :span="6"><el-card class="stat"><div class="t">最差</div><div class="v loss">{{ result.worst }}%</div></el-card></el-col>
+        <el-col :span="6"><el-card :class="cls(result.total_return)" class="stat"><div class="t">单笔总收益</div><div class="v">{{ result.total_return }}%</div></el-card></el-col>
+        <el-col :span="4"><el-card class="stat"><div class="t">最佳</div><div class="v profit">{{ result.best }}%</div></el-card></el-col>
+        <el-col :span="4"><el-card class="stat"><div class="t">最差</div><div class="v loss">{{ result.worst }}%</div></el-card></el-col>
         <el-col :span="6">
           <el-card class="stat">
             <div class="t">出场方式</div>
@@ -103,7 +108,7 @@
 import { submitBacktest, getTaskStatus, getLatestBacktest } from '@/api/backtest'
 
 export default {
-  data() { return { daysBack: 180, cash: 100000, commission: 0.001, maxStocks: 500, running: false, progress: null, result: null, pollTimer: null } },
+  data() { return { daysBack: 180, cash: 100000, commission: 0.001, maxStocks: 500, maxPositions: 5, running: false, progress: null, result: null, pollTimer: null } },
   async mounted() {
     try {
       const { data } = await getLatestBacktest()
@@ -120,7 +125,7 @@ export default {
       this.result = null
       this.progress = { pct: 0, text: '提交任务...', status: '' }
       try {
-        const { data } = await submitBacktest({ days_back: this.daysBack, initial_cash: this.cash, commission: this.commission, max_stocks: this.maxStocks })
+        const { data } = await submitBacktest({ days_back: this.daysBack, initial_cash: this.cash, commission: this.commission, max_stocks: this.maxStocks, max_positions: this.maxPositions })
         this.poll(data.task_id)
       } catch (e) {
         this.$message.error(e.response?.data?.detail || e.message)

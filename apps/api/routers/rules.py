@@ -17,8 +17,11 @@ FORBIDDEN_NAMES = {
 
 TEST_CTX = {
     "price": 25.5, "vol": 100000, "ma5": 25.0, "ma10": 24.5,
+    "ma20": 24.0, "ma60": 23.5,
     "ma5_vol": 80000, "last_close": 25.3, "high": 27.0, "low": 23.0,
-    "open": 25.4, "has_pos": True, "cost": 26.0,
+    "open": 25.4,
+    "rsi": 55, "atr": 1.2, "adx": 30, "amplitude": 0.035,
+    "has_pos": True, "cost": 26.0,
     "buy_date": 739500, "today": 739520,
 }
 

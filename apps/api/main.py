@@ -38,6 +38,8 @@ from routers.rules import router as rules_router
 from routers.backtest import router as backtest_router
 # 模拟盘路由
 from routers.paper_trading import router as paper_trading_router
+# 热力图选股路由
+from routers.heatmap_selection import router as heatmap_selection_router
 
 Log("rest_api", log_type=Log.TYPE_FILE, level=logging.INFO)
 
@@ -85,6 +87,8 @@ app.include_router(rules_router)
 app.include_router(backtest_router)
 # 模拟盘路由
 app.include_router(paper_trading_router)
+# 热力图选股路由
+app.include_router(heatmap_selection_router)
 
 
 @app.get("/")

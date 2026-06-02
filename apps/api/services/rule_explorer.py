@@ -96,10 +96,36 @@ def _generate_double_condition() -> str:
     return f"{l1} {op1} {r1} * {c1} {connector} {l2} {op2} {r2} * {c2}"
 
 
+BOUNDED_VARS = {
+    "rsi": (0, 100),
+    "adx": (0, 100),
+    "amplitude": (0, 1),
+}
+
+def _impossible_comparison(condition: str) -> bool:
+    """检测不可能成立的条件：如 rsi > 140 永远为 False"""
+    for var, (lo, hi) in BOUNDED_VARS.items():
+        for op in (">", ">="):
+            pat = re.compile(rf'\b{var}\s*{op}\s*([\d.]+)')
+            for m in pat.finditer(condition):
+                val = float(m.group(1))
+                if val > hi:
+                    return True
+        for op in ("<", "<="):
+            pat = re.compile(rf'\b{var}\s*{op}\s*([\d.]+)')
+            for m in pat.finditer(condition):
+                val = float(m.group(1))
+                if val < lo:
+                    return True
+    return False
+
+
 def _validate_condition(condition: str) -> bool:
     """校验单条条件是否合法"""
     ok, _ = validate_variables(condition)
     if not ok:
+        return False
+    if _impossible_comparison(condition):
         return False
     try:
         ast.parse(condition, mode="eval")
@@ -492,31 +518,20 @@ def generate_genetic_rules() -> int:
 
 
 # ============================================================
-# 验证：两轮漏斗式验证
+# 验证
 # ============================================================
-
-def sample_stocks(n: int = 500) -> List[str]:
-    """抽样 n 只股票"""
-    db = get_db()
-    all_codes = db.stock_kline.distinct("code", {"frequency": 9})
-
-    name_map = {}
-    for s in db.sector_stocks.find({}, {"stock_code": 1, "stock_name": 1}):
-        name_map[s["stock_code"].split(".")[-1]] = s.get("stock_name", "")
-
-    filtered = [c for c in all_codes if not name_map.get(c, "").startswith(("ST", "*ST"))]
-
-    if len(filtered) <= n:
-        return filtered
-    return random.sample(filtered, n)
-
 
 def _run_backtest_with_rules(rule_set: dict, stock_codes: List[str],
                              start_date: str, end_date: str, backtest_days: int) -> float:
     """用指定规则集跑回测，返回综合评分"""
     from services.backtest_engine import run_backtest
 
-    # 构建规则列表（3条规则：风控、卖出、买入）
+    # 跳过包含不可能条件的规则集
+    for cond_key in ("buy_condition", "sell_condition", "risk_condition"):
+        cond = rule_set.get(cond_key, "")
+        if _impossible_comparison(cond):
+            return -666, {"trades": 0, "portfolio_return": 0, "sharpe": 0, "win_rate": 0}
+
     rules = [
         {"rule_id": 1, "name": "风控", "type": "risk",
          "condition": rule_set.get("risk_condition", ""), "priority": 1, "weight": 1.0, "enabled": True},
@@ -532,115 +547,61 @@ def _run_backtest_with_rules(rule_set: dict, stock_codes: List[str],
     )
 
     return composite_score(
-        result.get("sharpe", 0), result.get("total_return", 0),
+        result.get("sharpe", 0), result.get("portfolio_return", 0),
         result.get("win_rate", 0), result.get("trades", 0), backtest_days
     ), result
 
 
-def validate_candidates(scope: str = "all", limit: int = 500, backtest_days: int = 180):
-    """两轮漏斗式验证"""
+def validate_candidates(scope: str = "all", backtest_days: int = 180):
+    """验证候选规则：不限数量，已验证或黑名单的跳过"""
     import pandas as pd
+    from services.backtest_engine import sample_market_stocks
 
     db = get_db()
     start_date = (datetime.now() - pd.Timedelta(days=backtest_days)).strftime("%Y-%m-%d")
     end_date = datetime.now().strftime("%Y-%m-%d")
 
-    query = {"validated": False, "validation_round": 0}
+    # 获取所有未验证的候选规则（不限数量）
+    query = {"$or": [{"validated": {"$ne": True}}, {"validated": {"$exists": False}}]}
     if scope != "all":
         query["source"] = scope
 
-    candidates = list(db.rule_candidates.find(query).limit(limit))
+    candidates = list(db.rule_candidates.find(query))
     if not candidates:
         logging.info("[VALIDATE] 没有需要验证的候选规则")
         return
 
-    # === 第一轮：50 只股票快速筛选 ===
-    quick_codes = sample_stocks(50)
-    logging.info(f"[VALIDATE] 第一轮：{len(candidates)} 条规则集，50 只股票快筛")
+    # 获取黑名单key集合，用于跳过
+    blacklist_keys = set(d.get("key", "") for d in db.rule_blacklist.find({}, {"key": 1}))
+    to_validate = [c for c in candidates if c.get("key", "") not in blacklist_keys]
+    skipped = len(candidates) - len(to_validate)
 
-    round1_pass = []
-    for i, cand in enumerate(candidates):
+    stock_codes = sample_market_stocks(500)
+    logging.info(f"[VALIDATE] 待验证 {len(to_validate)} 条（跳过 {skipped} 条黑名单），股票池 {len(stock_codes)} 只")
+
+    for i, cand in enumerate(to_validate):
         try:
-            score, result = _run_backtest_with_rules(cand, quick_codes, start_date, end_date, backtest_days)
-
-            if score > 0:
-                # 通过快筛，保留
-                db.rule_candidates.update_one(
-                    {"_id": cand["_id"]},
-                    {"$set": {"validation_round": 1, "composite_score": score}}
-                )
-                round1_pass.append(cand)
-            else:
-                # 不通过，入黑名单
-                db.rule_candidates.update_one(
-                    {"_id": cand["_id"]},
-                    {"$set": {"validation_round": -1, "composite_score": score}}
-                )
-                db.rule_blacklist.update_one(
-                    {"key": cand.get("key", "")},
-                    {"$set": {
-                        "key": cand.get("key", ""),
-                        "buy_condition": cand.get("buy_condition", ""),
-                        "sell_condition": cand.get("sell_condition", ""),
-                        "risk_condition": cand.get("risk_condition", ""),
-                        "score": score,
-                        "reason": "round1_fail",
-                        "created_at": datetime.now(),
-                    }},
-                    upsert=True
-                )
-        except Exception as e:
-            logging.error(f"[VALIDATE] 第一轮 {i+1} 失败: {e}")
-
-        if (i + 1) % 100 == 0:
-            logging.info(f"[VALIDATE] 第一轮进度 {i+1}/{len(candidates)}")
-
-    logging.info(f"[VALIDATE] 第一轮完成，{len(round1_pass)}/{len(candidates)} 条通过")
-
-    if not round1_pass:
-        logging.info("[VALIDATE] 没有通过快筛的规则")
-        return
-
-    # === 第二轮：500 只股票精测 ===
-    full_codes = sample_stocks(500)
-    logging.info(f"[VALIDATE] 第二轮：{len(round1_pass)} 条规则集，500 只股票精测")
-
-    for i, cand in enumerate(round1_pass):
-        try:
-            score, result = _run_backtest_with_rules(cand, full_codes, start_date, end_date, backtest_days)
+            score, result = _run_backtest_with_rules(cand, stock_codes, start_date, end_date, backtest_days)
 
             db.rule_candidates.update_one(
                 {"_id": cand["_id"]},
                 {"$set": {
                     "validated": True,
-                    "validation_round": 2,
+                    "validation_round": 1,
                     "composite_score": score,
+                    "portfolio_return": result.get("portfolio_return", 0),
                     "sharpe": result.get("sharpe", 0),
                     "win_rate": result.get("win_rate", 0),
-                    "total_return": result.get("total_return", 0),
                     "trades": result.get("trades", 0),
                 }}
             )
-
-            # 精测也不通过的入黑名单
-            if score < 0:
-                db.rule_blacklist.update_one(
-                    {"key": cand.get("key", "")},
-                    {"$set": {
-                        "key": cand.get("key", ""),
-                        "score": score,
-                        "reason": "round2_fail",
-                        "created_at": datetime.now(),
-                    }},
-                    upsert=True
-                )
         except Exception as e:
-            logging.error(f"[VALIDATE] 第二轮 {i+1} 失败: {e}")
+            logging.error(f"[VALIDATE] 验证 {i+1} 失败: {e}")
 
         if (i + 1) % 50 == 0:
-            logging.info(f"[VALIDATE] 第二轮进度 {i+1}/{len(round1_pass)}")
+            logging.info(f"[VALIDATE] 进度 {i+1}/{len(to_validate)}")
 
-    logging.info(f"[VALIDATE] 验证完成")
+    logging.info(f"[VALIDATE] 验证完成，共 {len(to_validate)} 条")
 
 
 # ============================================================
@@ -652,13 +613,18 @@ def apply_candidates() -> str:
     db = get_db()
 
     candidates = list(db.rule_candidates.find(
-        {"validated": True, "validation_round": 2, "composite_score": {"$gt": 0}}
+        {"validated": True, "validation_round": 1, "composite_score": {"$gt": 0}}
     ).sort("composite_score", -1))
 
     if not candidates:
         return "没有通过验证的候选规则，请先运行验证"
 
     best = candidates[0]
+
+    # 检查有没有不可能条件，警告但不阻止
+    for cond_key, label in [("buy_condition", "买入"), ("sell_condition", "卖出"), ("risk_condition", "风控")]:
+        if _impossible_comparison(best.get(cond_key, "")):
+            logging.warning(f"[APPLY] {label}条件存在不可能的比较: {best.get(cond_key, '')}")
 
     # 备份当前规则
     current_rules = list(db.trading_rules.find({}))

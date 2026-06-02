@@ -7,58 +7,135 @@ from typing import Dict, Any, List
 from database import get_db
 
 
-def sample_index_stocks(n: int = 500) -> List[str]:
-    """从中证500、沪深300、中证2000中抽样 n 只股票"""
+def _load_name_map():
+    """加载股票代码→名称映射"""
     db = get_db()
-
-    # 获取板块股票映射
-    index_names = ["中证500", "沪深300", "中证2000", "上证50", "创业板"]
-    index_codes = set()
-
-    for name in index_names:
-        stocks = db.sector_stocks.find(
-            {"sector_name": {"$regex": name}},
-            {"stock_code": 1}
-        )
-        for s in stocks:
-            code = s.get("stock_code", "").split(".")[-1]
-            if code:
-                index_codes.add(code)
-
-    if not index_codes:
-        # 如果没有板块数据，从全市场抽样
-        all_codes = db.stock_kline.distinct("code", {"frequency": 9})
-        index_codes = set(all_codes)
-
-    # 剔除 ST
     name_map = {}
     for s in db.sector_stocks.find({}, {"stock_code": 1, "stock_name": 1}):
-        name_map[s["stock_code"].split(".")[-1]] = s.get("stock_name", "")
-
-    filtered = [c for c in index_codes if not name_map.get(c, "").startswith(("ST", "*ST"))]
-
-    # 确保有足够的K线数据
-    valid_codes = []
-    for code in filtered:
-        count = db.stock_kline.count_documents({"code": code, "frequency": 9})
-        if count >= 60:
-            valid_codes.append(code)
-        if len(valid_codes) >= n * 2:  # 多取一些，后面再抽样
-            break
-
-    if len(valid_codes) <= n:
-        return valid_codes
-    return random.sample(valid_codes, n)
+        code = s.get("stock_code", "").split(".")[-1]
+        if code:
+            name_map[code] = s.get("stock_name", "")
+    return name_map
 
 
-class RuleStrategy(bt.Strategy):
-    """规则驱动策略：只负责调用规则引擎做买卖决策，其余交给 Backtrader"""
+_name_map_cache = None
 
-    params = dict(stop_loss_pct=0.08, max_hold_days=60, cooldown_days=3, stock_code="", custom_rules=None)
+def _load_name_map(force=False):
+    global _name_map_cache
+    if _name_map_cache is not None and not force:
+        return _name_map_cache
+    db = get_db()
+    _name_map_cache = {}
+    for s in db.sector_stocks.find({}, {"stock_code": 1, "stock_name": 1}):
+        code = s.get("stock_code", "").split(".")[-1]
+        if code:
+            _name_map_cache[code] = s.get("stock_name", "")
+    return _name_map_cache
+
+
+def sample_market_stocks(n: int = 500) -> List[str]:
+    """从全市场抽样 n 只股票（排除ST、300、301、688），和实盘完全一致"""
+    db = get_db()
+
+    all_codes = db.stock_kline.distinct("code", {"frequency": 9})
+    name_map = _load_name_map()
+
+    filtered = [c for c in all_codes
+                if name_map.get(c)  # 在 sector_stocks 没名字的（ETF/指数）跳过
+                and not name_map.get(c, "").startswith(("ST", "*ST"))
+                and not c.startswith(("300", "301", "688"))]
+
+    # 一条聚合查完所有计数量，替代逐个 count_documents
+    pipeline = [
+        {"$match": {"code": {"$in": filtered}, "frequency": 9}},
+        {"$group": {"_id": "$code", "count": {"$sum": 1}}},
+        {"$match": {"count": {"$gte": 20}}},
+    ]
+    result = list(db.stock_kline.aggregate(pipeline, allowDiskUse=True))
+    random.shuffle(result)
+    valid_codes = [d["_id"] for d in result[:n]]
+
+    return valid_codes
+
+
+def _load_aligned_klines(codes, start, end):
+    """加载多只股票K线并对齐到统一交易日历"""
+    import time
+    t0 = time.time()
+    db = get_db()
+
+    klines_raw = list(db.stock_kline.find(
+        {"code": {"$in": codes}, "frequency": 9,
+         "date": {"$gte": f"{start} 15:00", "$lte": f"{end} 15:00"}},
+        {"code": 1, "date": 1, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}
+    ).sort("date", 1))
+    logging.info(f"[ALIGN] MongoDB 查询 {len(klines_raw)} 条记录, 耗时 {time.time()-t0:.1f}s")
+
+    t1 = time.time()
+    stock_data = {}
+    for k in klines_raw:
+        stock_data.setdefault(k["code"], []).append(k)
+
+    result = {}
+    for code, klines in stock_data.items():
+        if len(klines) < 20:
+            continue
+        rows = []
+        for k in klines:
+            rows.append({
+                "datetime": pd.Timestamp(k["date"][:10]),
+                "open": float(k["open"]), "high": float(k["high"]),
+                "low": float(k["low"]), "close": float(k["close"]),
+                "volume": float(k["volume"]),
+            })
+        df = pd.DataFrame(rows).set_index("datetime").sort_index()
+        df = df[~df.index.duplicated(keep='first')]
+        result[code] = df
+    logging.info(f"[ALIGN] DataFrame 构建 {len(result)} 只, 耗时 {time.time()-t1:.1f}s")
+
+    if not result:
+        return result
+
+    t2 = time.time()
+    all_dates = sorted(set(
+        date for df in result.values() for date in df.index
+    ))
+    first_cal = all_dates[0].strftime("%Y-%m-%d") if all_dates else "none"
+    last_cal = all_dates[-1].strftime("%Y-%m-%d") if all_dates else "none"
+    logging.info(f"[ALIGN] 全日历 {len(all_dates)} 天 ({first_cal}~{last_cal}), "
+                 f"耗时 {time.time()-t2:.1f}s")
+
+    t3 = time.time()
+    for code in list(result.keys()):
+        df = result[code]
+
+        stock_dates = [d for d in all_dates if d >= df.index[0]]
+        if len(stock_dates) < 20:
+            del result[code]
+            continue
+
+        df = df.reindex(stock_dates)
+        df = df.ffill()
+        result[code] = df
+
+    logging.info(f"[ALIGN] 对齐完成, 有效股票 {len(result)} 只, 耗时 {time.time()-t3:.1f}s")
+    return result
+
+
+class PortfolioRuleStrategy(bt.Strategy):
+    """组合策略：单Cerebro + 共享资金池 + 每天全市场选股"""
+
+    params = dict(
+        stock_codes=None, name_map=None, custom_rules=None,
+        max_hold_days=60, cooldown_days=3, stop_loss_pct=0.08,
+        max_positions=5, start_date_str=None,
+    )
 
     def __init__(self):
         from bin.rule_engine import StockRuleEngine
-        self.code = self.p.stock_code
+
+        self.codes = list(self.p.stock_codes) if self.p.stock_codes else []
+        self.name_map = self.p.name_map or {}
 
         if self.p.custom_rules is not None:
             self.rules = self.p.custom_rules
@@ -68,121 +145,163 @@ class RuleStrategy(bt.Strategy):
 
         self.engine = StockRuleEngine(self.rules) if self.rules else None
 
-        # 均线
-        self.sma5 = bt.indicators.SMA(self.data.close, period=5)
-        self.sma10 = bt.indicators.SMA(self.data.close, period=10)
-        self.sma20 = bt.indicators.SMA(self.data.close, period=20)
-        self.sma60 = bt.indicators.SMA(self.data.close, period=60)
-        self.sma_vol5 = bt.indicators.SMA(self.data.volume, period=5)
+        self.indicators = {}
+        for i, code in enumerate(self.codes):
+            d = self.datas[i]
+            self.indicators[code] = {
+                'sma5': bt.indicators.SMA(d.close, period=5),
+                'sma10': bt.indicators.SMA(d.close, period=10),
+                'sma20': bt.indicators.SMA(d.close, period=20),
+                'sma_vol5': bt.indicators.SMA(d.volume, period=5),
+                'high20': bt.indicators.Highest(d.high, period=20),
+                'low20': bt.indicators.Lowest(d.low, period=20),
+                'rsi': bt.indicators.RSI(d.close, period=14),
+                'atr': bt.indicators.ATR(d, period=14),
+            }
 
-        # 高低价
-        self.highest20 = bt.indicators.Highest(self.data.high, period=20)
-        self.lowest20 = bt.indicators.Lowest(self.data.low, period=20)
-
-        # RSI / ATR / ADX
-        self.rsi = bt.indicators.RSI(self.data.close, period=14)
-        self.atr = bt.indicators.ATR(self.data, period=14)
-        self.adx = bt.indicators.ADX(self.data, period=14)
-
-        self.entry_price = None
-        self.entry_date = None
-        self.last_exit_date = None
+        raw = self.p.start_date_str
+        self.start_date = pd.Timestamp(raw).date() if raw else None
+        self.entry_prices = {}
+        self.entry_dates = {}
+        self.last_exit_dates = {}
         self.trade_log = []
 
-    def _ctx(self, has_pos, cost, buy_date, today):
+    def _ctx(self, code, has_pos, cost, buy_date, today):
         from bin.rule_engine import StockRuleEngine
+        i = self.codes.index(code)
+        d = self.datas[i]
+        ind = self.indicators[code]
 
-        last_close = self.data.close[-1]
-        amplitude = (self.data.high[0] - self.data.low[0]) / last_close if last_close > 0 else 0
+        last_close = d.close[-1] if len(d) > 1 else d.close[0]
+        amplitude = (d.high[0] - d.low[0]) / last_close if last_close > 0 else 0
 
         return StockRuleEngine.build_context({
-            "close": self.data.close[0], "volume": self.data.volume[0],
-            "ma5": self.sma5[0], "ma10": self.sma10[0],
-            "ma20": self.sma20[0], "ma60": self.sma60[0],
-            "ma5_vol": self.sma_vol5[0],
+            "close": d.close[0], "volume": d.volume[0],
+            "ma5": ind['sma5'][0], "ma10": ind['sma10'][0],
+            "ma20": ind['sma20'][0],
+            "ma5_vol": ind['sma_vol5'][0],
             "last_close": last_close,
-            "high": self.highest20[0], "low": self.lowest20[0],
-            "open": self.data.open[0], "name": "",
-            "rsi": self.rsi[0], "atr": self.atr[0], "adx": self.adx[0],
+            "high": ind['high20'][0], "low": ind['low20'][0],
+            "open": d.open[0], "name": self.name_map.get(code, ""),
+            "rsi": ind['rsi'][0], "atr": ind['atr'][0],
             "amplitude": amplitude,
-        }, {"has_pos": has_pos, "cost": cost, "buy_date": buy_date})
+        }, {"has_pos": has_pos, "cost": cost, "buy_date": buy_date, "today": today})
 
     def next(self):
-        if not self.engine or len(self.data) < 60:
+        if not self.engine:
             return
-        dt = self.data.datetime.date(0)
+        dt = self.datas[0].datetime.date(0)
+        if self.start_date and dt < self.start_date:
+            return
 
-        if not self.position:
-            # 卖出冷却期：刚卖完不要马上买回
-            if self.last_exit_date and (dt - self.last_exit_date).days < self.p.cooldown_days:
+        try:
+            # ==== 第一步：卖出 ====
+            for code in list(self.entry_prices.keys()):
+                i = self.codes.index(code)
+                d = self.datas[i]
+                hold_days = (dt - self.entry_dates[code]).days
+
+                if hold_days < 1:
+                    continue
+
+                ctx = self._ctx(code, True, self.entry_prices[code], self.entry_dates[code], dt)
+                risk, sell_score, _, triggered = self.engine.run(ctx)
+
+                if risk and len(self.trade_log) < 20:
+                    risk_rules = [r["name"] for r in triggered if r["type"] == "risk"]
+                    logging.info(f"[SELL_DEBUG] {code} risk={risk} sell_scr={sell_score:.1f} "
+                                 f"close={d.close[0]:.2f} cost={self.entry_prices[code]:.2f} "
+                                 f"cost*0.93={self.entry_prices[code]*0.93:.2f} "
+                                 f"triggered={risk_rules}")
+
+                reason = None
+                if risk:
+                    reason = "risk"
+                elif sell_score > 0:
+                    reason = "sell"
+                elif hold_days >= self.p.max_hold_days:
+                    reason = "timeout"
+                elif d.close[0] < self.entry_prices[code] * (1 - self.p.stop_loss_pct):
+                    reason = "stop_loss"
+
+                if reason:
+                    entry_price = self.entry_prices[code]
+                    if entry_price == 0:
+                        continue
+                    pnl = round((d.close[0] - entry_price) / entry_price * 100, 2)
+                    self.trade_log.append({
+                        "code": code, "name": self.name_map.get(code, ""),
+                        "entry_date": self.entry_dates[code].isoformat(),
+                        "exit_date": dt.isoformat(),
+                        "entry_price": round(entry_price, 2),
+                        "exit_price": round(d.close[0], 2),
+                        "pnl_pct": pnl,
+                        "hold_days": hold_days,
+                        "reason": reason,
+                        "triggered_rules": [r["name"] for r in (triggered or [])],
+                    })
+                    self.sell(data=d)
+                    del self.entry_prices[code]
+                    del self.entry_dates[code]
+                    self.last_exit_dates[code] = dt
+
+            # ==== 第二步：买入 ====
+            if len(self.entry_prices) >= self.p.max_positions:
                 return
-            _, _, buy_score, triggered = self.engine.run(self._ctx(False, 0, dt, dt))
-            if buy_score > 0:
-                self.buy()
-                self.entry_price = self.data.close[0]
-                self.entry_date = dt
-                logging.info(f"[BUY] {self.code} {dt} price={self.entry_price:.2f} buy_score={buy_score} rules={[r['name'] for r in triggered]}")
-        else:
-            hold_days = (dt - self.entry_date).days
-            # T+1：买入当天不能卖出（Backtrader默认次日执行，这里再加一层保障）
-            if hold_days < 1:
+
+            buy_candidates = []
+            for i, code in enumerate(self.codes):
+                if code in self.entry_prices:
+                    continue
+                if code in self.last_exit_dates and (dt - self.last_exit_dates[code]).days < self.p.cooldown_days:
+                    continue
+                if self.datas[i].close[0] <= 0:
+                    continue
+
+                ctx = self._ctx(code, False, 0, dt, dt)
+                _, _, buy_score, triggered = self.engine.run(ctx)
+                if buy_score > 0:
+                    buy_candidates.append((buy_score, code, triggered))
+
+            if not buy_candidates:
                 return
-            risk, sell_score, _, triggered = self.engine.run(self._ctx(True, self.entry_price, self.entry_date, dt))
-            reason = None
-            if risk:
-                reason = "risk"
-            elif sell_score > 0:
-                reason = "sell"
-            elif hold_days >= self.p.max_hold_days:
-                reason = "timeout"
-            elif self.data.close[0] < self.entry_price * (1 - self.p.stop_loss_pct):
-                reason = "stop_loss"
-            if reason:
-                pnl = round((self.data.close[0] - self.entry_price) / self.entry_price * 100, 2)
-                self.trade_log.append({
-                    "code": self.code, "entry_date": self.entry_date.isoformat(),
-                    "exit_date": dt.isoformat(), "entry_price": round(self.entry_price, 2),
-                    "exit_price": round(self.data.close[0], 2), "pnl_pct": pnl,
-                    "hold_days": hold_days, "reason": reason,
-                    "triggered_rules": [r["name"] for r in (triggered or [])],
-                })
-                logging.info(f"[SELL] {self.code} {dt} entry={self.entry_price:.2f} exit={self.data.close[0]:.2f} pnl={pnl}% reason={reason} rules={[r['name'] for r in (triggered or [])]}")
-                self.sell()
-                self.last_exit_date = dt
-                self.entry_price = None
-                self.entry_date = None
 
+            buy_candidates.sort(key=lambda x: x[0], reverse=True)
+            available_cash = self.broker.getcash()
+            current_positions = len(self.entry_prices)
 
-def _load_klines_batch(codes, start, end):
-    """批量加载多只股票的K线数据"""
-    db = get_db()
-    klines_raw = list(db.stock_kline.find(
-        {"code": {"$in": codes}, "frequency": 9,
-         "date": {"$gte": f"{start} 15:00", "$lte": f"{end} 15:00"}}
-    ).sort("date", 1))
+            for buy_score, code, triggered in buy_candidates:
+                if current_positions >= self.p.max_positions:
+                    break
 
-    stock_data = {}
-    for k in klines_raw:
-        code = k["code"]
-        if code not in stock_data:
-            stock_data[code] = []
-        stock_data[code].append(k)
+                d = self.datas[self.codes.index(code)]
+                price = d.close[0]
+                if price <= 0:
+                    continue
 
-    result = {}
-    for code, klines in stock_data.items():
-        if len(klines) < 60:
-            continue
-        rows = [{"datetime": pd.Timestamp(k["date"][:10]),
-                 "open": float(k["open"]), "high": float(k["high"]),
-                 "low": float(k["low"]), "close": float(k["close"]),
-                 "volume": float(k["volume"])} for k in klines]
-        result[code] = pd.DataFrame(rows).set_index("datetime")
+                remaining_slots = self.p.max_positions - current_positions
+                if remaining_slots <= 0:
+                    break
+                position_cash = available_cash / remaining_slots
+                if available_cash <= 0 or position_cash <= 0:
+                    break
 
-    return result
+                size = int(position_cash / price)
+                if size <= 0:
+                    continue
+
+                self.buy(data=d, size=size)
+                self.entry_prices[code] = price
+                self.entry_dates[code] = dt
+                current_positions += 1
+                available_cash -= size * price
+
+        except Exception as e:
+            import traceback
+            logging.error(f"[NEXT] {dt} error: {e}\n{traceback.format_exc()}")
 
 
 def _update_progress(task_id, current, total, status, detail=""):
-    """写进度到 MongoDB，按 task_id 隔离"""
     try:
         db = get_db()
         db.backtest_progress.update_one(
@@ -194,79 +313,88 @@ def _update_progress(task_id, current, total, status, detail=""):
         pass
 
 
-def run_backtest(strategy_name="rule_engine", codes=None, start_date=None, end_date=None,
+def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=None, end_date=None,
                  initial_cash=100000, commission=0.001, custom_rules=None, max_stocks=0,
-                 celery_task=None, task_id=None):
+                 celery_task=None, task_id=None, max_positions=5):
 
     if not start_date:
-        start_date = (datetime.now() - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
+        start_date = (datetime.now() - pd.Timedelta(days=180)).strftime("%Y-%m-%d")
     if not end_date:
         end_date = datetime.now().strftime("%Y-%m-%d")
 
+    warmup_days = 30
+    load_start = (pd.Timestamp(start_date) - pd.Timedelta(days=warmup_days)).strftime("%Y-%m-%d")
+
     db = get_db()
 
-    # 如果没有指定股票代码，根据 max_stocks 决定抽样方式
     if not codes:
         if max_stocks > 0:
-            codes = sample_index_stocks(max_stocks)
+            codes = sample_market_stocks(max_stocks)
             logging.info(f"[BACKTEST] 从指数成分股中抽样 {len(codes)} 只")
         else:
             codes = db.stock_kline.distinct("code", {"frequency": 9})
 
-    name_map = {}
-    for s in db.sector_stocks.find({}, {"stock_code": 1, "stock_name": 1}):
-        name_map[s["stock_code"].split(".")[-1]] = s.get("stock_name", "")
+    name_map = _load_name_map()
 
-    filtered = [c for c in codes if not name_map.get(c, "").startswith(("ST", "*ST"))]
+    filtered = [c for c in codes
+                if name_map.get(c)
+                and not name_map.get(c, "").startswith(("ST", "*ST"))
+                and not c.startswith(("300", "301", "688"))]
 
-    logging.info(f"[BACKTEST] {start_date}~{end_date} cash={initial_cash} codes={len(filtered)}")
+    logging.info(f"[BACKTEST] {start_date}~{end_date} cash={initial_cash} codes={len(filtered)} max_positions={max_positions} (向前取{warmup_days}天用于指标预热)")
 
-    # 批量加载K线数据
     if task_id:
         _update_progress(task_id, 0, len(filtered), "加载K线数据...", f"共 {len(filtered)} 只股票")
     logging.info(f"[BACKTEST] 批量加载K线数据...")
-    stock_dfs = _load_klines_batch(filtered, start_date, end_date)
-    logging.info(f"[BACKTEST] 加载完成，有效股票 {len(stock_dfs)} 只")
 
-    all_trades = []
-    processed = 0
-    skipped = 0
+    stock_dfs = _load_aligned_klines(filtered, load_start, end_date)
 
-    for i, code in enumerate(filtered):
-        if (i + 1) % 100 == 0 or (i + 1) == len(filtered):
-            logging.info(f"[BACKTEST] progress {i+1}/{len(filtered)} processed={processed} skipped={skipped} trades={len(all_trades)}")
-        if task_id and ((i + 1) % 10 == 0 or (i + 1) == len(filtered)):
-            _update_progress(task_id, i + 1, len(filtered), f"回测中 {i+1}/{len(filtered)}",
-                             f"已处理={processed} 跳过={skipped} 交易={len(all_trades)}")
+    start_ts = pd.Timestamp(start_date)
+    codes_with_data = [code for code, df in stock_dfs.items() if df.index[0] <= start_ts]
+    skipped_new = len(stock_dfs) - len(codes_with_data)
+    if skipped_new:
+        logging.info(f"[BACKTEST] 剔除{skipped_new}只上市日期晚于{start_date}的股票，保留{len(codes_with_data)}只")
+    logging.info(f"[BACKTEST] 加载完成，有效股票 {len(codes_with_data)} 只")
 
-        df = stock_dfs.get(code)
-        if df is None:
-            skipped += 1
-            continue
+    if not codes_with_data:
+        return {"strategy": strategy_name, "trades": 0, "processed": 0, "skipped": len(filtered)}
 
-        cerebro = bt.Cerebro()
-        cerebro.addstrategy(RuleStrategy, stock_code=code, custom_rules=custom_rules)
-        cerebro.adddata(bt.feeds.PandasData(dataname=df))
-        cerebro.broker.setcash(initial_cash)
-        cerebro.broker.setcommission(commission=commission)
-        cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name="sharpe", riskfreerate=0.03)
-        cerebro.addanalyzer(bt.analyzers.DrawDown, _name="dd")
-        cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="ta")
+    if task_id:
+        _update_progress(task_id, 0, len(codes_with_data), "运行组合回测...", f"加载 {len(codes_with_data)} 只股票数据")
 
-        try:
-            strat = cerebro.run()[0]
-            for t in strat.trade_log:
-                t["name"] = name_map.get(code, "")
-            all_trades.extend(strat.trade_log)
-            processed += 1
-        except Exception as e:
-            logging.error(f"[BACKTEST] error {code}: {e}")
-            skipped += 1
+    cerebro = bt.Cerebro()
+    cerebro.addstrategy(PortfolioRuleStrategy,
+                        stock_codes=codes_with_data,
+                        name_map=name_map,
+                        custom_rules=custom_rules,
+                        max_positions=max_positions,
+                        start_date_str=start_date)
 
-    logging.info(f"[BACKTEST] done: processed={processed} skipped={skipped} trades={len(all_trades)}")
+    for code in codes_with_data:
+        cerebro.adddata(bt.feeds.PandasData(dataname=stock_dfs[code]))
+
+    cerebro.broker.setcash(initial_cash)
+    cerebro.broker.setcommission(commission=commission)
+
+    try:
+        strat = cerebro.run()[0]
+    except Exception as e:
+        logging.error(f"[BACKTEST] 回测执行失败: {e}")
+        return {"strategy": strategy_name, "trades": 0, "processed": 0, "skipped": len(filtered), "error": str(e)}
+
+    all_trades = strat.trade_log
+    end_value = cerebro.broker.getvalue()
+    start_value = initial_cash
+    portfolio_return = round((end_value - start_value) / start_value * 100, 2)
+
+    logging.info(f"[BACKTEST] 组合: {start_value} -> {end_value:.0f} ({portfolio_return}%) trades={len(all_trades)}")
 
     if not all_trades:
-        return {"strategy": strategy_name, "trades": 0, "processed": processed, "skipped": skipped}
+        return {
+            "strategy": strategy_name, "trades": 0,
+            "processed": len(codes_with_data), "skipped": len(filtered) - len(codes_with_data),
+            "portfolio_return": portfolio_return,
+        }
 
     pnls = [t["pnl_pct"] for t in all_trades]
     wins = [p for p in pnls if p > 0]
@@ -284,8 +412,10 @@ def run_backtest(strategy_name="rule_engine", codes=None, start_date=None, end_d
 
     result = {
         "strategy": strategy_name, "trades": len(all_trades),
-        "processed": processed, "skipped": skipped,
+        "processed": len(codes_with_data),
+        "skipped": len(filtered) - len(codes_with_data),
         "unique_stocks": unique_codes,
+        "portfolio_return": portfolio_return,
         "win_rate": round(len(wins) / len(pnls) * 100, 1),
         "avg_return": round(sum(pnls) / len(pnls), 2),
         "total_return": round(sum(pnls), 2),
@@ -293,12 +423,13 @@ def run_backtest(strategy_name="rule_engine", codes=None, start_date=None, end_d
         "avg_win": round(sum(wins) / len(wins), 2) if wins else 0,
         "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
         "profit_factor": round(abs(sum(wins) / sum(losses)), 2) if losses and sum(losses) != 0 else 99,
-        "sharpe": sharpe, "exit_stats": exit_stats, "examples": all_trades[:10],
+        "sharpe": sharpe,
+        "exit_stats": exit_stats,
+        "examples": all_trades[:10],
     }
 
-    logging.info(f"[RESULT] trades={len(all_trades)} unique_stocks={unique_codes} win_rate={result['win_rate']}% avg_return={result['avg_return']}% total={result['total_return']}% sharpe={sharpe}")
-    logging.info(f"[RESULT] exit_stats={exit_stats} best={result['best']}% worst={result['worst']}% avg_win={result['avg_win']}% avg_loss={result['avg_loss']}%")
+    logging.info(f"[RESULT] 组合收益={portfolio_return}% trades={len(all_trades)} win_rate={result['win_rate']}% sharpe={sharpe}")
     for t in all_trades:
-        logging.info(f"[TRADE] {t['code']} {t.get('name','')} buy={t['entry_date']}@{t['entry_price']} sell={t['exit_date']}@{t['exit_price']} pnl={t['pnl_pct']}% hold={t['hold_days']}d reason={t['reason']} rules={t.get('triggered_rules',[])}")
+        logging.info(f"[TRADE] {t['code']} {t.get('name','')} buy={t['entry_date']}@{t['entry_price']} sell={t['exit_date']}@{t['exit_price']} pnl={t['pnl_pct']}% hold={t['hold_days']}d reason={t['reason']}")
 
     return result

@@ -240,7 +240,7 @@ async function fetchRules() {
   finally { loading.value = false }
 }
 
-const ALLOWED_VARS = ['price', 'vol', 'ma5', 'ma10', 'ma5_vol', 'last_close', 'high', 'low', 'open', 'has_pos', 'cost', 'buy_date', 'today']
+const ALLOWED_VARS = ['price', 'vol', 'ma5', 'ma10', 'ma20', 'ma60', 'ma5_vol', 'last_close', 'high', 'low', 'open', 'rsi', 'atr', 'adx', 'amplitude', 'has_pos', 'cost', 'buy_date', 'today']
 const FORBIDDEN = ['import', 'exec', 'eval', 'os', 'sys', 'subprocess', '__import__', '__builtins__', '__class__', 'getattr', 'setattr', 'globals', 'locals', 'compile', 'breakpoint']
 
 function validateCondition(cond) {

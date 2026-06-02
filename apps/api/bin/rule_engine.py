@@ -88,13 +88,10 @@ class StockRuleEngine:
                 triggered_rules.append(rule)
                 if rule["type"] == "risk":
                     risk_triggered = True
-                    logging.info(f"风控触发: {rule['name']}")
                 elif rule["type"] == "sell":
                     sell_score += rule.get("weight", 0)
-                    logging.info(f"卖出触发: {rule['name']}, weight={rule['weight']}")
                 elif rule["type"] == "buy":
                     buy_score += rule.get("weight", 0)
-                    logging.info(f"买入触发: {rule['name']}, weight={rule['weight']}")
 
         return risk_triggered, sell_score, buy_score, triggered_rules
 
@@ -103,8 +100,8 @@ class StockRuleEngine:
         if position is None:
             position = {}
 
-        today = datetime.now().date()
-        today_num = today.toordinal()
+        today = position.get("today", datetime.now().date())
+        today_num = today.toordinal() if isinstance(today, date) else datetime.now().date().toordinal()
 
         buy_date = position.get("buy_date")
         buy_date_num = buy_date.toordinal() if isinstance(buy_date, date) else today_num
