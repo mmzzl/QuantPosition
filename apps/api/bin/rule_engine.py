@@ -255,11 +255,16 @@ def filter_trend_up(db, exclude_codes=None):
 
 
 def suggest_prices(stock_data, atr):
-    """基于 ATR 计算建议买入/卖出价格"""
+    """基于 ATR 动态计算建议买入/卖出价格
+    按 ATR% 自动调整倍数：波动率低时多倍ATR，波动率高时少倍ATR
+    目标：买卖价差稳定在 ~3%，止损失在 ~6%
+    """
     close = stock_data["close"]
-    buy_price = round(close - atr, 2)   # 买入价：当前价 - ATR（回调买入）
-    sell_price = round(close + atr, 2)  # 卖出价：当前价 + ATR（止盈目标）
-    stop_loss = round(close - 2 * atr, 2)  # 止损价：当前价 - 2倍ATR
+    atr_pct = atr / close if close > 0 else 0.03
+    mult = max(0.3, min(3.0, 0.03 / atr_pct)) if atr_pct > 0 else 1.0
+    buy_price = round(close - atr * mult, 2)
+    sell_price = round(close + atr * mult, 2)
+    stop_loss = round(close - 2 * atr * mult, 2)
     return buy_price, sell_price, stop_loss
 
 
