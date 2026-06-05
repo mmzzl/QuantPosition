@@ -163,6 +163,40 @@ def calc_atr(highs, lows, closes, period=14):
     return sum(trs[-period:]) / period
 
 
+def calc_adx(highs, lows, closes, period=14):
+    """ADX 平均趋向指数 (0~100)，衡量趋势强度"""
+    if len(closes) < period * 2 + 1:
+        return 25
+
+    trs = []
+    plus_dms = []
+    minus_dms = []
+    for i in range(1, len(highs)):
+        tr = max(highs[i] - lows[i],
+                 abs(highs[i] - closes[i-1]),
+                 abs(lows[i] - closes[i-1]))
+        trs.append(tr)
+        up_move = highs[i] - highs[i-1]
+        down_move = lows[i-1] - lows[i]
+        plus_dms.append(up_move if up_move > down_move and up_move > 0 else 0)
+        minus_dms.append(down_move if down_move > up_move and down_move > 0 else 0)
+
+    dxs = []
+    for i in range(period - 1, len(trs)):
+        tr_avg = sum(trs[i-period+1:i+1]) / period
+        if tr_avg == 0:
+            continue
+        pdi = sum(plus_dms[i-period+1:i+1]) / period / tr_avg * 100
+        mdi = sum(minus_dms[i-period+1:i+1]) / period / tr_avg * 100
+        if pdi + mdi == 0:
+            continue
+        dxs.append(abs(pdi - mdi) / (pdi + mdi) * 100)
+
+    if len(dxs) < period:
+        return round(dxs[-1], 1) if dxs else 25
+    return round(sum(dxs[-period:]) / period, 1)
+
+
 def load_stock_klines(db, codes, days=60):
     """批量加载K线数据"""
     now = datetime.now()
@@ -204,7 +238,7 @@ def build_stock_indicators(klines):
         "open": klines[-1].get("open", 0),
         "rsi": calc_rsi(closes),
         "atr": atr,
-        "adx": 25,
+        "adx": calc_adx(highs, lows, closes),
         "amplitude": amplitude,
     }, atr
 
