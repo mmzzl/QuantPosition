@@ -157,6 +157,7 @@ class PortfolioRuleStrategy(bt.Strategy):
                 'low20': bt.indicators.Lowest(d.low, period=20),
                 'rsi': bt.indicators.RSI(d.close, period=14),
                 'atr': bt.indicators.ATR(d, period=14),
+                'adx': bt.indicators.ADX(d, period=14),
             }
 
         raw = self.p.start_date_str
@@ -183,7 +184,7 @@ class PortfolioRuleStrategy(bt.Strategy):
             "last_close": last_close,
             "high": ind['high20'][0], "low": ind['low20'][0],
             "open": d.open[0], "name": self.name_map.get(code, ""),
-            "rsi": ind['rsi'][0], "atr": ind['atr'][0],
+            "rsi": ind['rsi'][0], "atr": ind['atr'][0], "adx": ind['adx'][0],
             "amplitude": amplitude,
         }, {"has_pos": has_pos, "cost": cost, "buy_date": buy_date, "today": today})
 
