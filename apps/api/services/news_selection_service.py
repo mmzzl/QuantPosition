@@ -18,7 +18,10 @@ class NewsSelectionService:
         db = get_db()
 
         if start_date and end_date:
-            query = {"created_at": {"$gte": start_date, "$lte": end_date + " 23:59"}}
+            query = {"created_at": {
+                "$gte": datetime.strptime(start_date, "%Y-%m-%d"),
+                "$lte": datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            }}
         else:
             now = datetime.now()
             if period == "7d":

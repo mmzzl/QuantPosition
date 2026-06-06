@@ -103,20 +103,46 @@ BOUNDED_VARS = {
 }
 
 def _impossible_comparison(condition: str) -> bool:
-    """检测不可能成立的条件：如 rsi > 140 永远为 False"""
+    """检测不可能成立的条件：如 rsi > 140 或 adx > 80 * 1.5 永远为 False"""
     for var, (lo, hi) in BOUNDED_VARS.items():
-        for op in (">", ">="):
-            pat = re.compile(rf'\b{var}\s*{op}\s*([\d.]+)')
-            for m in pat.finditer(condition):
-                val = float(m.group(1))
-                if val > hi:
-                    return True
-        for op in ("<", "<="):
-            pat = re.compile(rf'\b{var}\s*{op}\s*([\d.]+)')
-            for m in pat.finditer(condition):
-                val = float(m.group(1))
-                if val < lo:
-                    return True
+        for op_sym, is_gt in ((">", True), ("<", False)):
+            for op in (op_sym, op_sym + "="):
+                pat = re.compile(rf'\b{var}\s*{op}\s*([\d.]+(?:\s*\*\s*[\d.]+)?)')
+                for m in pat.finditer(condition):
+                    val_str = m.group(1)
+                    if "*" in val_str:
+                        a, b = val_str.split("*")
+                        val = float(a.strip()) * float(b.strip())
+                    else:
+                        val = float(val_str)
+                    if is_gt and val > hi:
+                        return True
+                    if not is_gt and val < lo:
+                        return True
+    return False
+
+
+def _is_trivial_condition(condition: str) -> bool:
+    """检测无意义的条件：自引用、恒真、无价格/量/技术指标"""
+    try:
+        tree = ast.parse(condition, mode="eval")
+        vars_found = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                vars_found.add(node.id)
+            # 自引用比较：ma5 > ma5
+            if isinstance(node, ast.Compare):
+                left_var = node.left.id if isinstance(node.left, ast.Name) else None
+                for c in node.comparators:
+                    right_var = c.id if isinstance(c, ast.Name) else None
+                    if left_var and right_var and left_var == right_var:
+                        return True
+        # 只有 has_pos/today/buy_date，没有价格量指标 → 无方向性
+        price_tech = {"price", "ma5", "ma10", "ma20", "ma60", "last_close", "high", "low", "open", "rsi", "adx", "amplitude", "vol", "ma5_vol"}
+        if vars_found and not vars_found & price_tech:
+            return True
+    except Exception:
+        pass
     return False
 
 
@@ -126,6 +152,8 @@ def _validate_condition(condition: str) -> bool:
     if not ok:
         return False
     if _impossible_comparison(condition):
+        return False
+    if _is_trivial_condition(condition):
         return False
     try:
         ast.parse(condition, mode="eval")
@@ -147,6 +175,21 @@ def try_insert_candidate(rule_set: dict) -> bool:
     for cond in [buy, sell, risk]:
         if not _validate_condition(cond):
             return False
+
+    # 买入=卖出 → 无意义(同时触发)
+    if normalize_condition(buy) == normalize_condition(sell):
+        return False
+
+    # 风控不涉及 cost/atr/price → 无止损逻辑
+    risk_vars = set()
+    try:
+        for node in ast.walk(ast.parse(risk, mode="eval")):
+            if isinstance(node, ast.Name):
+                risk_vars.add(node.id)
+    except Exception:
+        pass
+    if not risk_vars & {"cost", "price", "atr", "last_close", "low"}:
+        return False
 
     # 生成唯一 key（三条条件排序后拼接）
     parts = sorted([normalize_condition(c) for c in [buy, sell, risk]])
@@ -187,30 +230,29 @@ def try_insert_candidate(rule_set: dict) -> bool:
 
 def composite_score(sharpe: float, total_return: float, win_rate: float,
                     trades: int, backtest_days: int = 180) -> float:
-    """综合评分：夏普40% + 年化收益40% + 胜率20%"""
+    """综合评分：夏普40% + 年化收益40% + 胜率20% (负夏普/负收益不再被忽略)"""
     if trades < 5:
         return -999
 
     annualized_return = total_return / backtest_days * 365
-    sharpe_norm = min(max(sharpe, 0), 2) / 2 * 100
-    return_norm = min(max(annualized_return, -50), 100)
+
+    # Sharpe -3~3 → 0~100 (负数拉低分数)
+    sharpe_clamped = min(max(sharpe, -3), 3)
+    sharpe_norm = (sharpe_clamped + 3) / 6 * 100
+
+    # 年化收益 -50%~100% → 0~100
+    ret_clamped = min(max(annualized_return, -50), 100)
+    return_norm = (ret_clamped + 50) / 150 * 100
+
     win_norm = min(max(win_rate, 0), 100)
 
     score = sharpe_norm * 0.4 + return_norm * 0.4 + win_norm * 0.2
     if trades > 500:
         score *= 0.8
+    elif trades < 10:
+        score *= 0.6
     return round(score, 2)
 
-
-def should_blacklist(sharpe: float, total_return: float, win_rate: float,
-                     trades: int) -> Tuple[bool, str]:
-    if trades == 0:
-        return True, "无交易"
-    if sharpe < -0.5:
-        return True, "夏普过低"
-    if win_rate < 30 and sharpe < 0:
-        return True, "胜率和夏普双低"
-    return False, ""
 
 
 def update_progress(phase: str, phase_label: str, **kwargs):
@@ -469,6 +511,10 @@ def generate_genetic_rules() -> int:
     for gen in range(GENERATIONS):
         new_rule_sets = []
 
+        if gen > 0 and gen % 5 == 0:
+            initial = list(db.rule_candidates.aggregate([{"$sample": {"size": POPULATION_SIZE}}]))
+            logging.info(f"[GENETIC] 刷新种群，当前候选池 {db.rule_candidates.count_documents({})} 条")
+
         for _ in range(POPULATION_SIZE):
             # 选择父代
             parent = random.choice(initial)
@@ -552,56 +598,115 @@ def _run_backtest_with_rules(rule_set: dict, stock_codes: List[str],
     ), result
 
 
-def validate_candidates(scope: str = "all", backtest_days: int = 180):
-    """验证候选规则：不限数量，已验证或黑名单的跳过"""
+def validate_candidates(scope: str = "all", limit: int = 500, backtest_days: int = 360):
+    """验证候选规则：多时段回测取平均，不一致的规则降分。自动分批直到全部验证完成"""
     import pandas as pd
     from services.backtest_engine import sample_market_stocks
 
     db = get_db()
-    start_date = (datetime.now() - pd.Timedelta(days=backtest_days)).strftime("%Y-%m-%d")
-    end_date = datetime.now().strftime("%Y-%m-%d")
 
-    # 获取所有未验证的候选规则（不限数量）
     query = {"$or": [{"validated": {"$ne": True}}, {"validated": {"$exists": False}}]}
     if scope != "all":
         query["source"] = scope
 
-    candidates = list(db.rule_candidates.find(query))
-    if not candidates:
+    total_unvalidated = db.rule_candidates.count_documents(query)
+    if total_unvalidated == 0:
         logging.info("[VALIDATE] 没有需要验证的候选规则")
         return
 
-    # 获取黑名单key集合，用于跳过
+    logging.info(f"[VALIDATE] 共 {total_unvalidated} 条待验证，分批处理（每批 {limit} 条）")
+
     blacklist_keys = set(d.get("key", "") for d in db.rule_blacklist.find({}, {"key": 1}))
-    to_validate = [c for c in candidates if c.get("key", "") not in blacklist_keys]
-    skipped = len(candidates) - len(to_validate)
+    periods = 3
+    if backtest_days < periods:
+        backtest_days = periods * 30
+    period_days = backtest_days // periods
+    stock_codes = sample_market_stocks(300)
+    total_validated = 0
+    batch_no = 0
 
-    stock_codes = sample_market_stocks(500)
-    logging.info(f"[VALIDATE] 待验证 {len(to_validate)} 条（跳过 {skipped} 条黑名单），股票池 {len(stock_codes)} 只")
+    while True:
+        candidates = list(db.rule_candidates.find(query).limit(limit))
+        if not candidates:
+            break
+        batch_no += 1
 
-    for i, cand in enumerate(to_validate):
-        try:
-            score, result = _run_backtest_with_rules(cand, stock_codes, start_date, end_date, backtest_days)
+        batch_to_validate = [c for c in candidates if c.get("key", "") not in blacklist_keys]
+        logging.info(f"[VALIDATE] 第{batch_no}批: 取 {len(candidates)} 条"
+                     f"（跳过 {len(candidates) - len(batch_to_validate)} 条黑名单）")
 
-            db.rule_candidates.update_one(
-                {"_id": cand["_id"]},
-                {"$set": {
-                    "validated": True,
-                    "validation_round": 1,
-                    "composite_score": score,
-                    "portfolio_return": result.get("portfolio_return", 0),
-                    "sharpe": result.get("sharpe", 0),
-                    "win_rate": result.get("win_rate", 0),
-                    "trades": result.get("trades", 0),
-                }}
-            )
-        except Exception as e:
-            logging.error(f"[VALIDATE] 验证 {i+1} 失败: {e}")
+        for i, cand in enumerate(batch_to_validate):
+            try:
+                sharpe_list, ret_list, win_list, trades_list = [], [], [], []
 
-        if (i + 1) % 50 == 0:
-            logging.info(f"[VALIDATE] 进度 {i+1}/{len(to_validate)}")
+                for p_idx in range(periods):
+                    p_end = datetime.now() - pd.Timedelta(days=p_idx * period_days)
+                    p_start = p_end - pd.Timedelta(days=period_days)
+                    _, result = _run_backtest_with_rules(
+                        cand, stock_codes,
+                        p_start.strftime("%Y-%m-%d"),
+                        p_end.strftime("%Y-%m-%d"),
+                        period_days
+                    )
+                    sharpe_list.append(result.get("sharpe", 0))
+                    ret_list.append(result.get("portfolio_return", 0))
+                    win_list.append(result.get("win_rate", 0))
+                    trades_list.append(result.get("trades", 0))
 
-    logging.info(f"[VALIDATE] 验证完成，共 {len(to_validate)} 条")
+                avg_sharpe = sum(sharpe_list) / periods
+                avg_return = sum(ret_list) / periods
+                avg_win = sum(win_list) / periods
+                total_trades = sum(trades_list)
+
+                pos_count = sum(1 for s in sharpe_list if s > 0)
+                neg_count = periods - pos_count
+                if pos_count == 0:
+                    variance_penalty = 0.6
+                elif neg_count >= 2:
+                    variance_penalty = 0.75
+                else:
+                    sharpe_std = (sum((s - avg_sharpe) ** 2 for s in sharpe_list) / periods) ** 0.5
+                    if sharpe_std > 2.0:
+                        variance_penalty = 0.8
+                    elif sharpe_std > 1.0:
+                        variance_penalty = 0.9
+                    else:
+                        variance_penalty = 1.0
+
+                score = composite_score(avg_sharpe, avg_return, avg_win, total_trades, period_days)
+                score = round(score * variance_penalty, 2)
+
+                db.rule_candidates.update_one(
+                    {"_id": cand["_id"]},
+                    {"$set": {
+                        "validated": True,
+                        "validation_round": 1,
+                        "composite_score": score,
+                        "portfolio_return": round(avg_return, 2),
+                        "sharpe": round(avg_sharpe, 2),
+                        "win_rate": round(avg_win, 1),
+                        "trades": total_trades,
+                        "periods": {
+                            "count": periods,
+                            "period_days": period_days,
+                            "sharpe_list": [round(s, 2) for s in sharpe_list],
+                            "return_list": [round(r, 2) for r in ret_list],
+                        }
+                    }}
+                )
+                total_validated += 1
+            except Exception as e:
+                logging.error(f"[VALIDATE] 验证失败: {e}")
+                db.rule_candidates.update_one(
+                    {"_id": cand["_id"]},
+                    {"$set": {"validated": True, "validated_error": str(e)}}
+                )
+
+            if total_validated % 50 == 0:
+                remaining = total_unvalidated - total_validated
+                logging.info(f"[VALIDATE] 进度 {total_validated}/{total_unvalidated}（剩余约 {remaining} 条）")
+
+    logging.info(f"[VALIDATE] 验证完成，共 {total_validated} 条")
 
 
 # ============================================================
@@ -620,18 +725,23 @@ def apply_candidates() -> str:
         return "没有通过验证的候选规则，请先运行验证"
 
     best = candidates[0]
+    return _replace_rules_with_candidate(best)
 
+
+def _replace_rules_with_candidate(candidate: dict) -> str:
+    """用指定候选规则替换当前交易规则"""
+    db = get_db()
     # 检查有没有不可能条件，警告但不阻止
     for cond_key, label in [("buy_condition", "买入"), ("sell_condition", "卖出"), ("risk_condition", "风控")]:
-        if _impossible_comparison(best.get(cond_key, "")):
-            logging.warning(f"[APPLY] {label}条件存在不可能的比较: {best.get(cond_key, '')}")
+        if _impossible_comparison(candidate.get(cond_key, "")):
+            logging.warning(f"[APPLY] {label}条件存在不可能的比较: {candidate.get(cond_key, '')}")
 
     # 备份当前规则
     current_rules = list(db.trading_rules.find({}))
     if current_rules:
         db.rule_backup.insert_one({
             "backup_at": datetime.now(),
-            "source": "apply_candidates",
+            "source": "apply_single_candidate",
             "rules": [{k: v for k, v in r.items() if k != "_id"} for r in current_rules]
         })
         backups = list(db.rule_backup.find().sort("backup_at", -1))
@@ -639,7 +749,7 @@ def apply_candidates() -> str:
             for old in backups[10:]:
                 db.rule_backup.delete_one({"_id": old["_id"]})
 
-    # 用最优规则集替换
+    # 用候选规则替换
     db.trading_rules.delete_many({})
     for i, (rule_type, cond_key) in enumerate([
         ("risk", "risk_condition"),
@@ -648,9 +758,9 @@ def apply_candidates() -> str:
     ]):
         db.trading_rules.insert_one({
             "rule_id": i + 1,
-            "name": f"{best.get('name', '候选')}_{rule_type}",
+            "name": f"{candidate.get('name', '候选')}_{rule_type}",
             "type": rule_type,
-            "condition": best.get(cond_key, ""),
+            "condition": candidate.get(cond_key, ""),
             "priority": {"risk": 1, "sell": 2, "buy": 3}[rule_type],
             "weight": 0.5,
             "enabled": True,
@@ -658,4 +768,14 @@ def apply_candidates() -> str:
             "updated_at": datetime.now(),
         })
 
-    return f"已更新，最优评分 {best.get('composite_score', 0)}"
+    return f"已更新，评分 {candidate.get('composite_score', 0)}"
+
+
+def apply_candidate_by_id(candidate_id: str) -> str:
+    """用指定ID的候选规则替换当前规则"""
+    from bson import ObjectId
+    db = get_db()
+    candidate = db.rule_candidates.find_one({"_id": ObjectId(candidate_id)})
+    if not candidate:
+        return "候选规则不存在"
+    return _replace_rules_with_candidate(candidate)

@@ -61,12 +61,12 @@ def run_dual_ma_selection(
                 "date": {"$gte": start_str, "$lte": end_str + " 23:59"}
             }).sort("date", 1))
             
-            if len(klines) < long_period:
+            if len(klines) < long_period + 1:
                 continue
 
             # 排除ST股票
             name = stock_name_map.get(code, "")
-            if name.startswith("ST") or name.startswith("*ST"):
+            if name.startswith("ST"):
                 continue
 
             # 计算均线

@@ -157,8 +157,8 @@ class HoldingService:
         if new_quantity == 0:
             holdings_collection.delete_one({"_id": holding["_id"]})
         else:
-            # 摊薄成本：剩余总成本 = 原总成本 - 卖出金额（不含费用）
-            remaining_cost = old_total_cost - sell_amount
+            # 摊薄成本：剩余总成本 = 原总成本 - 卖出对应成本
+            remaining_cost = old_total_cost - cost_of_sold
             new_avg_cost = remaining_cost / new_quantity if remaining_cost > 0 else 0
 
             holdings_collection.update_one(

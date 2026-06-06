@@ -6,6 +6,11 @@ from celery_config import celery_app
 from database import get_db
 
 
+def _normalize_code(code: str) -> str:
+    """统一股票代码格式：去掉 .SZ/.SH 后缀"""
+    return code.split(".")[0].strip()
+
+
 @celery_app.task(bind=True, name="tasks.heatmap_selection.run")
 def run_heatmap_selection(self) -> Dict[str, Any]:
     try:
@@ -33,7 +38,7 @@ def run_heatmap_selection(self) -> Dict[str, Any]:
             sector_name = item["bk_name"]
             if sector_name not in sector_map:
                 sector_map[sector_name] = {"sector_code": item.get("bk_code", ""), "stocks": []}
-            pure_code = item["stock_code"].strip()
+            pure_code = _normalize_code(item["stock_code"])
             sector_map[sector_name]["stocks"].append(pure_code)
             if pure_code not in stock_to_sector:
                 stock_to_sector[pure_code] = {
@@ -111,7 +116,7 @@ def run_heatmap_selection(self) -> Dict[str, Any]:
                     continue
                 change_pct = ((lc - fc) / fc) * 100
                 name = stock_to_sector[pure_code]["stock_name"]
-                if name.startswith("ST") or name.startswith("*ST"):
+                if name.startswith("ST"):
                     continue
                 raw.append({
                     "code": pure_code,
@@ -130,9 +135,12 @@ def run_heatmap_selection(self) -> Dict[str, Any]:
                 stock["sector_rank_pct"] = round((rank + 1) / len(raw) * 100, 1) if raw else 100
             all_stocks.extend(raw)
 
-        cache_collection.delete_many({})
+        batch_id = int(datetime.now().timestamp() * 1000)
+        for s in all_stocks:
+            s["batch_id"] = batch_id
         if all_stocks:
             cache_collection.insert_many(copy.deepcopy(all_stocks))
+            cache_collection.delete_many({"batch_id": {"$ne": batch_id}})
 
         filtered = _filter_stocks(all_stocks)
 
@@ -162,7 +170,7 @@ def _filter_stocks(stocks):
             continue
         if s.get("volume", 0) <= 0:
             continue
-        if s.get("current_price", 0) < 5:
+        if s.get("current_price", 0) <= 5:
             continue
         if s.get("change_pct", 0) <= 0:
             continue

@@ -1,11 +1,20 @@
 from typing import List
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.auth import AuthenticatedUser, get_current_active_user
 from services.role_service import RoleService
 from schemas.role import RoleCreate, RoleUpdate, RoleResponse
+from database import get_db
 
 router = APIRouter(prefix="/roles", tags=["角色管理"])
+
+
+def _require_roles_edit(user: AuthenticatedUser):
+    """检查用户是否有 roles:edit 权限"""
+    roles = RoleService.get_user_roles(user.user_id)
+    if not any(r.get("preset_key") in ("super_admin", "admin") for r in roles):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要角色管理权限")
 
 
 @router.get("", response_model=List[RoleResponse])
@@ -41,6 +50,7 @@ async def create_role(
     current_user: AuthenticatedUser = Depends(get_current_active_user)
 ):
     """创建角色"""
+    _require_roles_edit(current_user)
     try:
         if role_data.parent_roles:
             for parent_id in role_data.parent_roles:
@@ -106,6 +116,7 @@ async def update_role(
     current_user: AuthenticatedUser = Depends(get_current_active_user)
 ):
     """更新角色"""
+    _require_roles_edit(current_user)
     try:
         role = RoleService.update_role(role_id, role_data)
 
@@ -140,6 +151,7 @@ async def delete_role(
     current_user: AuthenticatedUser = Depends(get_current_active_user)
 ):
     """删除角色"""
+    _require_roles_edit(current_user)
     try:
         success = RoleService.delete_role(role_id)
 
@@ -162,6 +174,7 @@ async def add_user_to_role(
     current_user: AuthenticatedUser = Depends(get_current_active_user)
 ):
     """将用户添加到角色"""
+    _require_roles_edit(current_user)
     success = RoleService.add_user_to_role(user_id, role_id)
 
     if not success:
@@ -180,6 +193,7 @@ async def remove_user_from_role(
     current_user: AuthenticatedUser = Depends(get_current_active_user)
 ):
     """将用户从角色移除"""
+    _require_roles_edit(current_user)
     success = RoleService.remove_user_from_role(user_id, role_id)
 
     if not success:
@@ -219,24 +233,18 @@ async def get_effective_permissions(
     current_user: AuthenticatedUser = Depends(get_current_active_user)
 ):
     """获取角色的有效权限（包含继承链）"""
-    role = RoleService.get_role_by_id(role_id)
-    if not role:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Role not found"
-        )
-
-    perm_ids = RoleService.get_effective_permissions(role_id)
-
-    db = current_user
     from database import get_db
     db = get_db()
+    role = db.roles.find_one({"_id": ObjectId(role_id)})
+    if not role:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+
+    perm_ids = RoleService.get_effective_permissions(role_id)
     perms_collection = db.permissions
 
     object_ids = []
     for pid in perm_ids:
         try:
-            from bson import ObjectId
             object_ids.append(ObjectId(pid))
         except Exception:
             continue

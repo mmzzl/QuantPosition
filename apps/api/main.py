@@ -15,13 +15,10 @@ from routers import auth, users, roles, permissions, menu as menu_module
 from app.endpoints.holdings import router as holdings_router
 # 菜单路由
 from routers.menu import router as menu_router
-# 权限路由
-from routers.permissions import router as permissions_router
 # 角色服务
 from services.role_service import RoleService
 from app.core.auth import get_password_hash
 from database import get_db
-from systems.logs import Log
 # 板块热力图路由
 from routers.sectors import router as sectors_router
 # 选股路由
@@ -69,8 +66,6 @@ app.include_router(permissions.router)
 app.include_router(holdings_router)
 # 菜单路由
 app.include_router(menu_router)
-# 权限路由
-app.include_router(permissions_router)
 # 板块热力图路由
 app.include_router(sectors_router)
 # 选股路由
@@ -106,8 +101,10 @@ def health_check():
 
 @app.on_event("startup")
 async def startup_event():
-    """初始化预设角色和默认管理员"""
+    """初始化预设角色、权限和默认管理员"""
     RoleService.init_preset_roles()
+    from routers.permissions import init_default_permissions
+    init_default_permissions()
     init_default_admin()
 
 

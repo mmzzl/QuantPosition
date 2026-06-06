@@ -60,7 +60,6 @@ async def register(user_data: UserCreate):
         username=user_data.username,
         email=user_data.email,
         phone=user_data.phone,
-        role="normal_admin",
         is_active=True,
         created_at=now,
         updated_at=now

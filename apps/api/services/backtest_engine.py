@@ -7,17 +7,6 @@ from typing import Dict, Any, List
 from database import get_db
 
 
-def _load_name_map():
-    """加载股票代码→名称映射"""
-    db = get_db()
-    name_map = {}
-    for s in db.sector_stocks.find({}, {"stock_code": 1, "stock_name": 1}):
-        code = s.get("stock_code", "").split(".")[-1]
-        if code:
-            name_map[code] = s.get("stock_name", "")
-    return name_map
-
-
 _name_map_cache = None
 
 def _load_name_map(force=False):
@@ -129,6 +118,7 @@ class PortfolioRuleStrategy(bt.Strategy):
         stock_codes=None, name_map=None, custom_rules=None,
         max_hold_days=60, cooldown_days=3, stop_loss_pct=0.08,
         max_positions=5, start_date_str=None,
+        task_id=None, bars_total=0,
     )
 
     def __init__(self):
@@ -152,6 +142,7 @@ class PortfolioRuleStrategy(bt.Strategy):
                 'sma5': bt.indicators.SMA(d.close, period=5),
                 'sma10': bt.indicators.SMA(d.close, period=10),
                 'sma20': bt.indicators.SMA(d.close, period=20),
+                'sma60': bt.indicators.SMA(d.close, period=60),
                 'sma_vol5': bt.indicators.SMA(d.volume, period=5),
                 'high20': bt.indicators.Highest(d.high, period=20),
                 'low20': bt.indicators.Lowest(d.low, period=20),
@@ -167,6 +158,10 @@ class PortfolioRuleStrategy(bt.Strategy):
         self.last_exit_dates = {}
         self.trade_log = []
 
+        self._bar_count = 0
+        self._bars_total = self.p.bars_total or 0
+        self._next_progress_pct = 5
+
     def _ctx(self, code, has_pos, cost, buy_date, today):
         from bin.rule_engine import StockRuleEngine
         i = self.codes.index(code)
@@ -179,7 +174,7 @@ class PortfolioRuleStrategy(bt.Strategy):
         return StockRuleEngine.build_context({
             "close": d.close[0], "volume": d.volume[0],
             "ma5": ind['sma5'][0], "ma10": ind['sma10'][0],
-            "ma20": ind['sma20'][0],
+            "ma20": ind['sma20'][0], "ma60": ind['sma60'][0],
             "ma5_vol": ind['sma_vol5'][0],
             "last_close": last_close,
             "high": ind['high20'][0], "low": ind['low20'][0],
@@ -194,6 +189,13 @@ class PortfolioRuleStrategy(bt.Strategy):
         dt = self.datas[0].datetime.date(0)
         if self.start_date and dt < self.start_date:
             return
+
+        self._bar_count += 1
+        pct = int(self._bar_count * 100 / self._bars_total) if self._bars_total else 0
+        if pct >= self._next_progress_pct and self._next_progress_pct <= 100 and self.p.task_id:
+            _update_progress(self.p.task_id, self._bar_count, self._bars_total,
+                             f"回测中... [{pct}%]", f"第 {self._bar_count}/{self._bars_total} 个交易日")
+            self._next_progress_pct += 5
 
         try:
             # ==== 第一步：卖出 ====
@@ -212,18 +214,18 @@ class PortfolioRuleStrategy(bt.Strategy):
                     risk_rules = [r["name"] for r in triggered if r["type"] == "risk"]
                     logging.info(f"[SELL_DEBUG] {code} risk={risk} sell_scr={sell_score:.1f} "
                                  f"close={d.close[0]:.2f} cost={self.entry_prices[code]:.2f} "
-                                 f"cost*0.93={self.entry_prices[code]*0.93:.2f} "
+                                 f"stop_loss={self.entry_prices[code]*(1-self.p.stop_loss_pct):.2f} "
                                  f"triggered={risk_rules}")
 
                 reason = None
                 if risk:
                     reason = "risk"
+                elif d.close[0] < self.entry_prices[code] * (1 - self.p.stop_loss_pct):
+                    reason = "stop_loss"
                 elif sell_score > 0:
                     reason = "sell"
                 elif hold_days >= self.p.max_hold_days:
                     reason = "timeout"
-                elif d.close[0] < self.entry_prices[code] * (1 - self.p.stop_loss_pct):
-                    reason = "stop_loss"
 
                 if reason:
                     entry_price = self.entry_prices[code]
@@ -259,7 +261,7 @@ class PortfolioRuleStrategy(bt.Strategy):
                 if self.datas[i].close[0] <= 0:
                     continue
 
-                ctx = self._ctx(code, False, 0, dt, dt)
+                ctx = self._ctx(code, False, 0, None, dt)
                 _, _, buy_score, triggered = self.engine.run(ctx)
                 if buy_score > 0:
                     buy_candidates.append((buy_score, code, triggered))
@@ -310,8 +312,8 @@ def _update_progress(task_id, current, total, status, detail=""):
             {"$set": {"current": current, "total": total, "status": status, "detail": detail, "updated_at": datetime.now()}},
             upsert=True,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logging.warning(f"进度更新失败: {e}")
 
 
 def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=None, end_date=None,
@@ -350,6 +352,10 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
 
     stock_dfs = _load_aligned_klines(filtered, load_start, end_date)
 
+    if task_id:
+        loaded = sum(len(df) for df in stock_dfs.values())
+        _update_progress(task_id, 0, len(stock_dfs), "K线加载完成", f"{len(stock_dfs)} 只股票, {loaded} 条K线")
+
     start_ts = pd.Timestamp(start_date)
     codes_with_data = [code for code, df in stock_dfs.items() if df.index[0] <= start_ts]
     skipped_new = len(stock_dfs) - len(codes_with_data)
@@ -358,10 +364,25 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
     logging.info(f"[BACKTEST] 加载完成，有效股票 {len(codes_with_data)} 只")
 
     if not codes_with_data:
+        if task_id:
+            _update_progress(task_id, 0, 0, "无有效股票", "所有股票因数据不足被过滤")
         return {"strategy": strategy_name, "trades": 0, "processed": 0, "skipped": len(filtered)}
 
     if task_id:
         _update_progress(task_id, 0, len(codes_with_data), "运行组合回测...", f"加载 {len(codes_with_data)} 只股票数据")
+
+    # 计算回测期内 next() 实际会被调用的交易日数
+    # backtrader 从最晚有数据的股票才开始，所以取 codes_with_data 中最晚起始日
+    end_ts = pd.Timestamp(end_date)
+    all_dates = set()
+    for df in stock_dfs.values():
+        all_dates.update(df.index)
+    if codes_with_data:
+        latest_start = max(stock_dfs[code].index[0] for code in codes_with_data)
+        bars_total = sum(1 for d in all_dates if latest_start <= d <= end_ts)
+        logging.info(f"[BACKTEST] 交易日: {bars_total} 天 (从 {latest_start.date()} 开始, 最晚上市股)")
+    else:
+        bars_total = 0
 
     cerebro = bt.Cerebro()
     cerebro.addstrategy(PortfolioRuleStrategy,
@@ -369,7 +390,9 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
                         name_map=name_map,
                         custom_rules=custom_rules,
                         max_positions=max_positions,
-                        start_date_str=start_date)
+                        start_date_str=start_date,
+                        task_id=task_id,
+                        bars_total=bars_total)
 
     for code in codes_with_data:
         cerebro.adddata(bt.feeds.PandasData(dataname=stock_dfs[code]))
@@ -381,6 +404,8 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
         strat = cerebro.run()[0]
     except Exception as e:
         logging.error(f"[BACKTEST] 回测执行失败: {e}")
+        if task_id:
+            _update_progress(task_id, 0, 0, "回测失败", str(e))
         return {"strategy": strategy_name, "trades": 0, "processed": 0, "skipped": len(filtered), "error": str(e)}
 
     all_trades = strat.trade_log
@@ -391,6 +416,8 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
     logging.info(f"[BACKTEST] 组合: {start_value} -> {end_value:.0f} ({portfolio_return}%) trades={len(all_trades)}")
 
     if not all_trades:
+        if task_id:
+            _update_progress(task_id, bars_total, bars_total, "回测完成（无交易）", "没有触发买入信号")
         return {
             "strategy": strategy_name, "trades": 0,
             "processed": len(codes_with_data), "skipped": len(filtered) - len(codes_with_data),
@@ -423,7 +450,7 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
         "best": round(max(pnls), 2), "worst": round(min(pnls), 2),
         "avg_win": round(sum(wins) / len(wins), 2) if wins else 0,
         "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
-        "profit_factor": round(abs(sum(wins) / sum(losses)), 2) if losses and sum(losses) != 0 else 99,
+        "profit_factor": round(abs(sum(wins) / sum(losses)), 2) if losses and sum(losses) != 0 else float('inf'),
         "sharpe": sharpe,
         "exit_stats": exit_stats,
         "examples": all_trades[:10],
@@ -432,5 +459,8 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
     logging.info(f"[RESULT] 组合收益={portfolio_return}% trades={len(all_trades)} win_rate={result['win_rate']}% sharpe={sharpe}")
     for t in all_trades:
         logging.info(f"[TRADE] {t['code']} {t.get('name','')} buy={t['entry_date']}@{t['entry_price']} sell={t['exit_date']}@{t['exit_price']} pnl={t['pnl_pct']}% hold={t['hold_days']}d reason={t['reason']}")
+
+    if task_id:
+        _update_progress(task_id, bars_total, bars_total, "回测完成", f"交易 {len(all_trades)} 笔")
 
     return result

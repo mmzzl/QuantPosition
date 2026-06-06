@@ -6,8 +6,9 @@ import traceback
 import requests
 import pandas as pd
 import logging
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from threading import Lock
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from pymongo import UpdateOne
@@ -25,7 +26,7 @@ TODAY_FLAG = " 15:00"
 
 
 def _tencent_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict]]:
-    market = "sh" if code.startswith(("6", "5")) else "sz"
+    market = "bj" if code.startswith("8") else ("sh" if code.startswith(("6", "5")) else "sz")
     try:
         r = requests.get(
             "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
@@ -163,6 +164,7 @@ class StockKlineScraper:
             }
 
             pending = []
+            pending_lock = Lock()
             for i, future in enumerate(as_completed(futures)):
                 code = futures[future]
                 try:
@@ -172,15 +174,17 @@ class StockKlineScraper:
                     elif not records:
                         results["skipped"] += 1
                     else:
-                        pending.extend(records)
+                        with pending_lock:
+                            pending.extend(records)
                         results["success"] += 1
                 except Exception as e:
                     logging.error(f"Error processing {code}: {e}")
                     results["failed"] += 1
 
                 if len(pending) >= 2000:
-                    self.save_klines(pending)
-                    pending = []
+                    with pending_lock:
+                        self.save_klines(pending)
+                        pending = []
 
                 if (i + 1) % 500 == 0:
                     logging.info(
@@ -188,8 +192,9 @@ class StockKlineScraper:
                         f'success={results["success"]}, skipped={results["skipped"]}, failed={results["failed"]}'
                     )
 
-        if pending:
-            self.save_klines(pending)
+        with pending_lock:
+            if pending:
+                self.save_klines(pending)
 
         logging.info(
             f"Daily kline fetch completed: total={total}, "

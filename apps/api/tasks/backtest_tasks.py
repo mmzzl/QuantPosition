@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from typing import Dict, Any
+import logging
 from celery_config import celery_app
 from database import get_db
 from services.backtest_engine import run_backtest
@@ -13,8 +14,8 @@ def _save(strategy: str, data: dict):
             {**data, "saved_at": datetime.now()},
             upsert=True,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logging.warning(f"保存回测结果失败: {e}")
 
 
 @celery_app.task(bind=True, name="tasks.backtest.run_simple")

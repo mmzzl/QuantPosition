@@ -164,8 +164,8 @@ const varGroups = [
   { label: '持仓数据', vars: [
     { name: 'has_pos', desc: '是否持仓 (true/false)' },
     { name: 'cost', desc: '持仓成本' },
-    { name: 'buy_date', desc: '买入日期 (如 2026-05-19)' },
-    { name: 'today', desc: '当前日期' },
+    { name: 'buy_date', desc: '买入日期 (用数字序号，如 739500)' },
+    { name: 'today', desc: '当前日期 (数字序号)' },
   ]},
 ]
 

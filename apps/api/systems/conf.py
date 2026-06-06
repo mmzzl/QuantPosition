@@ -59,7 +59,7 @@ class Conf(object):
                     for key, value in parser.items(section):
                         config[section][key] = value
             except Exception as e:
-                logging.error(e.message)
+                logging.error(str(e))
 
         return config
 

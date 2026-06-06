@@ -28,7 +28,6 @@ async def get_users(
             username=user["username"],
             email=user.get("email"),
             phone=user.get("phone"),
-            role=user.get("role", "user"),
             is_active=user.get("is_active", True),
             created_at=user.get("created_at"),
             updated_at=user.get("updated_at")
@@ -89,12 +88,11 @@ async def update_user(
     
     target_user = users_collection.find_one({"_id": ObjectId(user_id)})
     if target_user and target_user.get("username") == "admin":
-        if user_data.role is not None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="不能修改管理员角色"
-            )
-    
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="不能修改管理员用户"
+        )
+
     user = UserService.update_user(user_id, user_data)
 
     if not user:
@@ -108,7 +106,6 @@ async def update_user(
         username=user["username"],
         email=user.get("email"),
         phone=user.get("phone"),
-        role=user.get("role", "user"),
         is_active=user.get("is_active", True),
         created_at=user.get("created_at"),
         updated_at=user.get("updated_at")
@@ -146,7 +143,13 @@ async def change_password(
     password_data: ChangePassword,
     current_user: AuthenticatedUser = Depends(get_current_active_user)
 ):
-    """修改用户密码"""
+    """修改用户密码（仅限本人或管理员）"""
+    if current_user.user_id != user_id:
+        from services.role_service import RoleService
+        roles = RoleService.get_user_roles(current_user.user_id)
+        if not any(r.get("preset_key") == "super_admin" for r in roles):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改他人密码")
+
     db = get_db()
     users_collection = db.users
 
@@ -157,7 +160,7 @@ async def change_password(
             detail="User not found"
         )
 
-    if password_data.old_password and not verify_password(password_data.old_password, user["password_hash"]):
+    if not verify_password(password_data.old_password, user["password_hash"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect old password"

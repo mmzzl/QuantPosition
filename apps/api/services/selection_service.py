@@ -47,7 +47,7 @@ class StockSelectionService:
                 "date": {"$gte": start_str, "$lte": end_str + " 23:59"}
             }).sort("date", 1))
             
-            if len(klines) < long_period:
+            if len(klines) < long_period + 1:
                 continue
             
             # 计算均线

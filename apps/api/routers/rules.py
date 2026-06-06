@@ -5,8 +5,31 @@ from bson import ObjectId
 from app.core.auth import AuthenticatedUser, get_current_user
 from services.rule_service import RuleService
 from database import get_db
+from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/rules", tags=["交易规则"])
+
+STALE_THRESHOLD_MINUTES = 5
+
+
+def _reset_stale_progress(progress: dict, db) -> dict:
+    """检测并重置卡死的任务进度"""
+    if progress and progress.get("status") == "running":
+        updated_at = progress.get("updated_at")
+        if updated_at and isinstance(updated_at, datetime):
+            if datetime.now() - updated_at > timedelta(minutes=STALE_THRESHOLD_MINUTES):
+                db.rule_explore_progress.update_one(
+                    {"_id": "current"},
+                    {"$set": {
+                        "status": "error", "phase": "stale",
+                        "phase_label": "任务已失效（Celery 重启或崩溃）",
+                        "error_msg": "上次任务未正常结束，已自动重置",
+                        "updated_at": datetime.now(),
+                    }}
+                )
+                progress["status"] = "error"
+                progress["phase_label"] = "任务已失效，可重新开始"
+    return progress
 
 FORBIDDEN_NAMES = {
     "import", "exec", "eval", "os", "sys", "subprocess",
@@ -99,8 +122,9 @@ async def create_rule(
     data: RuleCreate,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
-    if data.condition:
-        validate_condition(data.condition)
+    if not data.condition or not data.condition.strip():
+        raise HTTPException(status_code=400, detail="条件不能为空")
+    validate_condition(data.condition)
     return RuleService.create_rule(data.model_dump())
 
 
@@ -133,6 +157,7 @@ async def get_explore_status(
     progress = db.rule_explore_progress.find_one({"_id": "current"})
     if not progress:
         return {"status": "idle", "phase": "none"}
+    progress = _reset_stale_progress(progress, db)
     progress.pop("_id", None)
     return progress
 
@@ -145,6 +170,7 @@ async def start_explore(
 ):
     db = get_db()
     progress = db.rule_explore_progress.find_one({"_id": "current"})
+    progress = _reset_stale_progress(progress, db) if progress else progress
     if progress and progress.get("status") == "running":
         raise HTTPException(status_code=409, detail="已有探索任务在运行中，请等待完成")
 
@@ -161,13 +187,14 @@ from tasks.rule_explore_tasks import run_rule_validation
 class ValidateRequest(BaseModel):
     scope: str = "all"
     limit: int = 500
+    backtest_days: int = 360
 
 @router.post("/validate-candidates")
 async def start_validate(
     data: ValidateRequest,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
-    task = run_rule_validation.delay(data.scope, data.limit)
+    task = run_rule_validation.delay(data.scope, data.limit, data.backtest_days)
     return {"task_id": task.id, "message": "验证任务已启动"}
 
 
@@ -222,6 +249,17 @@ async def delete_candidate(
 
 class ClearRequest(BaseModel):
     scope: str = "all"
+
+@router.post("/candidates/{candidate_id}/apply")
+async def apply_single_candidate(
+    candidate_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """用指定候选规则替换当前规则"""
+    from services.rule_explorer import apply_candidate_by_id
+    result = apply_candidate_by_id(candidate_id)
+    return {"message": result}
+
 
 @router.delete("/candidates")
 async def clear_candidates(

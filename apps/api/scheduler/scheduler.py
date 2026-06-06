@@ -191,7 +191,7 @@ def tasks_load_from_inputs(inputs):
                 continue
         command =   result.group("command") if result else ""
         command = os.path.join(home(), "apps", "api", command)
-        script = f"python {command}"
+        script = f"{sys.executable} {command}"
         if "interval" in options:
             task = IntervalTask(script, options["interval"])
         elif "cron" in options:

@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse, quote
 from systems.logs import Log
+
+logger = logging.getLogger(__name__)
 from systems.single import ScriptSingle
 from systems.sys import home
 
@@ -23,7 +25,7 @@ def send_dingtalk_message(title: str, content: str):
     """发送钉钉消息"""
     try:
         import sys
-        sys.path.insert(0, __file__)
+        sys.path.insert(0, os.path.dirname(__file__))
         from database import get_db
         db = get_db()
         settings = db.system_settings.find_one({"_id": "global"})
@@ -68,7 +70,7 @@ def send_dingtalk_message(title: str, content: str):
 
 class StockRuleEngine:
     def __init__(self, rules: List[Dict]):
-        self.rules = sorted(rules, key=lambda r: r["priority"])
+        self.rules = sorted(rules, key=lambda r: r.get("priority", 99))
 
     def run(self, ctx: dict) -> tuple:
         risk_triggered = False
@@ -118,7 +120,7 @@ class StockRuleEngine:
             "high": stock_data.get("high", 0),
             "low": stock_data.get("low", 0),
             "open": stock_data.get("open", 0),
-            "rsi": stock_data.get("rsi", 50),
+            "rsi": stock_data.get("rsi", 0),
             "atr": stock_data.get("atr", 0),
             "adx": stock_data.get("adx", 0),
             "amplitude": stock_data.get("amplitude", 0),
@@ -132,7 +134,10 @@ class StockRuleEngine:
 
 def calc_sma(data, n):
     """简单移动平均"""
-    return sum(data[-n:]) / n if len(data) >= n else data[-1]
+    if len(data) < n:
+        logger.warning("calc_sma: need %d values, got %d, fallback to last value", n, len(data))
+        return data[-1]
+    return sum(data[-n:]) / n
 
 
 def calc_rsi(prices, period=14):
@@ -164,37 +169,45 @@ def calc_atr(highs, lows, closes, period=14):
 
 
 def calc_adx(highs, lows, closes, period=14):
-    """ADX 平均趋向指数 (0~100)，衡量趋势强度"""
-    if len(closes) < period * 2 + 1:
+    """ADX 平均趋向指数 (0~100)，Wilder's 平滑，与 backtrader 保持一致"""
+    if len(closes) < period * 2:
         return 25
 
-    trs = []
-    plus_dms = []
-    minus_dms = []
-    for i in range(1, len(highs)):
+    trs, plus_dms, minus_dms = [], [], []
+    for i in range(1, len(closes)):
         tr = max(highs[i] - lows[i],
-                 abs(highs[i] - closes[i-1]),
-                 abs(lows[i] - closes[i-1]))
+                 abs(highs[i] - closes[i - 1]),
+                 abs(lows[i] - closes[i - 1]))
         trs.append(tr)
-        up_move = highs[i] - highs[i-1]
-        down_move = lows[i-1] - lows[i]
+        up_move = highs[i] - highs[i - 1]
+        down_move = lows[i - 1] - lows[i]
         plus_dms.append(up_move if up_move > down_move and up_move > 0 else 0)
         minus_dms.append(down_move if down_move > up_move and down_move > 0 else 0)
 
+    # Wilder's smooth TR, +DM, -DM
+    s_tr = sum(trs[:period]) / period
+    s_pdm = sum(plus_dms[:period]) / period
+    s_mdm = sum(minus_dms[:period]) / period
+
     dxs = []
-    for i in range(period - 1, len(trs)):
-        tr_avg = sum(trs[i-period+1:i+1]) / period
-        if tr_avg == 0:
-            continue
-        pdi = sum(plus_dms[i-period+1:i+1]) / period / tr_avg * 100
-        mdi = sum(minus_dms[i-period+1:i+1]) / period / tr_avg * 100
+    for i in range(period, len(trs)):
+        s_tr = (s_tr * (period - 1) + trs[i]) / period
+        s_pdm = (s_pdm * (period - 1) + plus_dms[i]) / period
+        s_mdm = (s_mdm * (period - 1) + minus_dms[i]) / period
+        pdi = s_pdm / s_tr * 100 if s_tr > 0 else 0
+        mdi = s_mdm / s_tr * 100 if s_tr > 0 else 0
         if pdi + mdi == 0:
             continue
         dxs.append(abs(pdi - mdi) / (pdi + mdi) * 100)
 
     if len(dxs) < period:
         return round(dxs[-1], 1) if dxs else 25
-    return round(sum(dxs[-period:]) / period, 1)
+
+    # Wilder's smooth ADX
+    adx = sum(dxs[:period]) / period
+    for i in range(period, len(dxs)):
+        adx = (adx * (period - 1) + dxs[i]) / period
+    return round(adx, 1)
 
 
 def load_stock_klines(db, codes, days=60):
@@ -220,22 +233,28 @@ def build_stock_indicators(klines):
     highs = [k["high"] for k in klines]
     lows = [k["low"] for k in klines]
 
-    last_close = closes[-1]
+    kline = klines[-1]
+    cur_close = closes[-1]
+    open_val = kline.get("open")
+    if open_val is None:
+        logger.warning("build_stock_indicators: missing 'open' in kline for code=%s", kline.get("code", "?"))
+        open_val = 0
+    prev_close = closes[-2] if len(closes) >= 2 else cur_close
     atr = calc_atr(highs, lows, closes)
-    amplitude = (highs[-1] - lows[-1]) / last_close if last_close > 0 else 0
+    amplitude = (highs[-1] - lows[-1]) / prev_close if prev_close > 0 else 0
 
     return {
-        "close": last_close,
+        "close": cur_close,
         "volume": volumes[-1],
         "ma5": calc_sma(closes, 5),
         "ma10": calc_sma(closes, 10),
         "ma20": calc_sma(closes, 20),
         "ma60": calc_sma(closes, 60),
         "ma5_vol": calc_sma(volumes, 5),
-        "last_close": closes[-2] if len(closes) >= 2 else closes[-1],
+        "last_close": prev_close,
         "high": max(highs[-20:]),
         "low": min(lows[-20:]),
-        "open": klines[-1].get("open", 0),
+        "open": open_val,
         "rsi": calc_rsi(closes),
         "atr": atr,
         "adx": calc_adx(highs, lows, closes),

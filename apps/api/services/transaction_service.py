@@ -126,41 +126,18 @@ class TransactionService:
 
     @staticmethod
     def get_all_realized_pnl() -> Dict:
-        """管理员获取所有用户已实现盈亏"""
+        """管理员获取所有用户已实现盈亏（聚合每条卖出记录的 realized_pnl）"""
         db = get_db()
         transactions_collection = db.transactions
 
-        # 按用户分组计算
         pipeline = [
-            {"$match": {"type": "sell"}},
-            {"$group": {"_id": "$user_id", "total_sell": {"$sum": "$total"}}}
+            {"$match": {"type": "sell", "realized_pnl": {"$exists": True}}},
+            {"$group": {"_id": "$user_id", "realized_pnl": {"$sum": "$realized_pnl"}}}
         ]
 
-        sell_by_user = list(transactions_collection.aggregate(pipeline))
+        results = list(transactions_collection.aggregate(pipeline))
 
-        pipeline = [
-            {"$match": {"type": "buy"}},
-            {"$group": {"_id": "$user_id", "total_buy": {"$sum": "$total"}}}
-        ]
-
-        buy_by_user = list(transactions_collection.aggregate(pipeline))
-
-        sell_dict = {item["_id"]: item["total_sell"] for item in sell_by_user}
-        buy_dict = {item["_id"]: item["total_buy"] for item in buy_by_user}
-
-        users = set(sell_dict.keys()) | set(buy_dict.keys())
-
-        results = []
-        for user_id in users:
-            total_sell = sell_dict.get(user_id, 0)
-            total_buy = buy_dict.get(user_id, 0)
-            realized_pnl = round(total_sell - total_buy, 2)
-
-            results.append({
-                "user_id": user_id,
-                "total_sell": total_sell,
-                "total_buy": total_buy,
-                "realized_pnl": realized_pnl
-            })
-
-        return {"users": results, "total_realized_pnl": sum(r["realized_pnl"] for r in results)}
+        return {
+            "users": [{"user_id": r["_id"], "realized_pnl": round(r["realized_pnl"], 2)} for r in results],
+            "total_realized_pnl": round(sum(r["realized_pnl"] for r in results), 2)
+        }

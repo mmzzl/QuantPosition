@@ -148,7 +148,7 @@ async def get_holding_history(
     return TransactionService.get_history(user_id, page, page_size)
 
 
-@router.get("/{user_id}/exit-rule")
+@router.get("/{user_id}/{code}/exit-rule")
 async def get_exit_rule(
     user_id: str,
     code: str,
@@ -281,7 +281,7 @@ async def get_portfolio(
             detail="无权限访问"
         )
 
-    holdings_data = HoldingService.get_holdings(user_id, page=1, page_size=1000)
+    holdings_data = HoldingService.get_holdings(user_id, page=1, page_size=10000)
     
     # 为组合汇总获取实时价格
     for h in holdings_data["items"]:
@@ -439,18 +439,10 @@ async def get_admin_holdings(
 
 
 def _is_admin(user: AuthenticatedUser) -> bool:
-    """检查是否为管理员"""
-    # 需要根据实际角色系统判断，这里简化处理
-    # 可以通过查询用户角色来判断
-    db = get_db()
-    users_collection = db.users
-
+    """检查是否为管理员（通过 user_roles + roles 集合）"""
+    from services.role_service import RoleService
     try:
-        user_doc = users_collection.find_one({"_id": ObjectId(user.user_id)})
-        if user_doc:
-            role = user_doc.get("role")
-            return role == "admin"
+        roles = RoleService.get_user_roles(user.user_id)
+        return any(r.get("preset_key") in ("super_admin", "admin", "system_admin") for r in roles)
     except Exception:
-        pass
-
-    return False
+        return False

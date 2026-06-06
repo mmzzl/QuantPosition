@@ -64,6 +64,10 @@ export function deleteBlacklist(id) {
   return http.delete(`/rules/blacklist/${id}`)
 }
 
+export function applyCandidate(id) {
+  return http.post(`/rules/candidates/${id}/apply`)
+}
+
 export function getBackups() {
   return http.get('/rules/backup')
 }

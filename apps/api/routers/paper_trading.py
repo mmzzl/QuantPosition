@@ -7,7 +7,7 @@ router = APIRouter(prefix="/paper-trading", tags=["模拟盘"])
 
 
 @router.get("/positions")
-async def get_paper_positions(
+def get_paper_positions(
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     try:
@@ -17,7 +17,7 @@ async def get_paper_positions(
 
 
 @router.post("/sync-buy")
-async def sync_buy(
+def sync_buy(
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     try:
@@ -27,7 +27,7 @@ async def sync_buy(
 
 
 @router.post("/sync-sell")
-async def sync_sell(
+def sync_sell(
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     try:
@@ -37,7 +37,7 @@ async def sync_sell(
 
 
 @router.post("/clear")
-async def clear_paper(
+def clear_paper(
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     try:

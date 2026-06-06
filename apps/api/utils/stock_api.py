@@ -18,6 +18,8 @@ class SinaStockAPI:
         if len(code) == 6:
             if code.startswith(('6', '5')):
                 return f"sh{code}"
+            elif code.startswith('8'):
+                return f"bj{code}"
             elif code.startswith(('0', '3', '1')):
                 return f"sz{code}"
         return code

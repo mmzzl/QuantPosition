@@ -38,7 +38,7 @@ class SectorService:
             sector_name = item["bk_name"]
             if sector_name not in sector_map:
                 sector_map[sector_name] = {"sector_code": item.get("bk_code", ""), "stocks": []}
-            pure_code = item["stock_code"].strip()
+            pure_code = item["stock_code"].split(".")[0].strip()
             sector_map[sector_name]["stocks"].append(pure_code)
             all_stock_codes.add(pure_code)
 
@@ -172,13 +172,13 @@ class SectorService:
         stock_list = []
         for stock in stocks:
             code = stock["stock_code"]
-            pure_code = code.split(".")[-1] if "." in code else code
+            pure_code = code.split(".")[0].strip()
             prices = stock_prices.get(pure_code, {})
             first_kline = prices.get("first", {})
             last_kline = prices.get("last", {})
 
             current_price = last_kline.get("close", 0)
-            open_price = first_kline.get("close", 0)
+            open_price = first_kline.get("open", 0)
             change_pct = 0
             if open_price > 0 and current_price > 0:
                 change_pct = ((current_price - open_price) / open_price) * 100

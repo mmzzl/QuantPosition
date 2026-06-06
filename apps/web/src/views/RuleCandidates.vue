@@ -70,8 +70,9 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="80">
+      <el-table-column label="操作" width="180">
         <template #default="{ row }">
+          <el-button size="small" type="primary" @click="handleApplySingle(row)">更新规则</el-button>
           <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -110,7 +111,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getCandidates, deleteCandidate, clearCandidates,
   startValidateCandidates, applyCandidates,
-  getBlacklist, deleteBlacklist
+  getBlacklist, deleteBlacklist, applyCandidate
 } from '@/api/rules'
 
 const loading = ref(false)
@@ -203,6 +204,18 @@ async function handleApply() {
   } catch (e) {
     if (e !== 'cancel') ElMessage.error(e.response?.data?.detail || '更新失败')
   } finally { applying.value = false }
+}
+
+async function handleApplySingle(row) {
+  try {
+    await ElMessageBox.confirm(`确定用「${row.name || '未命名'}」替换当前规则？会自动备份。`, '更新规则')
+    const res = await applyCandidate(row._id)
+    ElMessage.success(res.data.message)
+    fetchCandidates()
+    fetchStats()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.response?.data?.detail || '更新失败')
+  }
 }
 
 async function handleRemoveBlacklist(row) {

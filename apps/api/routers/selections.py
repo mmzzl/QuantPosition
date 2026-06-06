@@ -16,6 +16,8 @@ async def run_dual_ma_selection_api(
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
     """运行双均线选股策略（异步）"""
+    if short_period >= long_period:
+        raise HTTPException(status_code=400, detail="short_period 必须小于 long_period")
     try:
         task = run_dual_ma_selection.delay(
             short_period=short_period,

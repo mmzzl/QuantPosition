@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 import bcrypt
+from bson import ObjectId
 
 from config.config import settings
 
@@ -70,9 +71,8 @@ class AuthenticatedUser:
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
-    db=None
 ) -> AuthenticatedUser:
-    """获取当前用户"""
+    """获取当前用户（验证 token 并查库校验用户有效）"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -93,6 +93,14 @@ async def get_current_user(
 
     if username is None:
         raise credentials_exception
+
+    from database import get_db
+    db = get_db()
+    user = db.users.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        raise credentials_exception
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is disabled")
 
     return AuthenticatedUser(user_id=user_id, username=username, is_active=True)
 

@@ -86,8 +86,6 @@ class UserService:
             update_data["email"] = user_data.email
         if user_data.phone is not None:
             update_data["phone"] = user_data.phone
-        if user_data.role is not None:
-            update_data["role"] = user_data.role
         if user_data.is_active is not None:
             update_data["is_active"] = user_data.is_active
 

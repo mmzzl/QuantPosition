@@ -179,21 +179,6 @@ async def get_menus(
     user_roles = list(user_roles_collection.find({"user_id": current_user.user_id}))
     role_ids = [ur["role_id"] for ur in user_roles]
 
-    # 如果没有关联，尝试从用户表 role 字段映射
-    if not role_ids:
-        users_collection = db.users
-        user = users_collection.find_one({"_id": ObjectId(current_user.user_id)})
-        if user and user.get("role"):
-            role_map = {
-                "admin": "super_admin",
-                "system_admin": "system_admin", 
-                "normal_admin": "normal_admin"
-            }
-            preset_key = role_map.get(user.get("role"), user.get("role"))
-            role = roles_collection.find_one({"preset_key": preset_key})
-            if role:
-                role_ids = [str(role["_id"])]
-
     all_permission_ids = set()
     for role_id in role_ids:
         try:
@@ -203,14 +188,17 @@ async def get_menus(
             continue
 
     # 获取权限名称集合
-    perm_names = set()
+    perm_ids_list = []
     for pid in all_permission_ids:
         try:
-            perm = permissions_collection.find_one({"_id": ObjectId(pid)})
-            if perm:
-                perm_names.add(perm["name"])
+            perm_ids_list.append(ObjectId(pid))
         except Exception:
             continue
+
+    perm_names = set()
+    if perm_ids_list:
+        for perm in permissions_collection.find({"_id": {"$in": perm_ids_list}}):
+            perm_names.add(perm["name"])
 
     # 读取菜单配置文件
     config_path = os.path.join(
@@ -238,20 +226,18 @@ async def get_menus(
         
         if children:
             menus.append({
-                "path": menu_group["path"],
-                "label": menu_group["label"],
+                "path": menu_group.get("path", ""),
+                "label": menu_group.get("label", ""),
                 "permission": menu_group.get("permission"),
                 "children": children
             })
         elif not menu_group.get("children"):
-            # 没有子菜单的父菜单直接添加
             menus.append({
-                "path": menu_group["path"],
-                "label": menu_group["label"],
+                "path": menu_group.get("path", ""),
+                "label": menu_group.get("label", ""),
                 "permission": menu_group.get("permission")
             })
+        else:
+            pass
 
     return {"menus": menus}
-
-
-init_default_permissions()

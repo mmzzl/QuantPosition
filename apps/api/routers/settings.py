@@ -44,8 +44,7 @@ async def get_public_settings():
             if k in ("site_name", "site_description", "site_logo",
                      "site_favicon", "site_domain", "icp_beian",
                      "icp_beian_url", "site_status", "close_tip",
-                     "timezone", "date_format", "time_format",
-                     "dingtalk_webhook", "dingtalk_secret")}
+                     "timezone", "date_format", "time_format")}
 
 
 class SystemSettings(BaseModel):
@@ -89,10 +88,9 @@ async def update_settings(
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
     """更新系统设置（管理员）"""
-    db = get_db()
-    from bson import ObjectId
-    user_doc = db.users.find_one({"_id": ObjectId(current_user.user_id)})
-    if not user_doc or user_doc.get("role") not in ("admin", "super_admin", "system_admin"):
+    from services.role_service import RoleService
+    roles = RoleService.get_user_roles(current_user.user_id)
+    if not any(r.get("preset_key") in ("super_admin", "admin", "system_admin") for r in roles):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
 
     update = {k: v for k, v in settings.model_dump().items() if v is not None}

@@ -7,7 +7,7 @@
         <el-button @click="syncSell" :loading="syncing">执行规则卖出</el-button>
         <el-button @click="refresh" type="primary">刷新</el-button>
         <el-popconfirm title="确定清空所有模拟持仓？" @confirm="clearAll">
-          <el-button slot="reference" type="danger" size="small">清空</el-button>
+          <el-button type="danger" size="small">清空</el-button>
         </el-popconfirm>
       </div>
     </div>
@@ -40,7 +40,7 @@
     </el-row>
 
     <el-card style="margin-top:16px">
-      <div slot="header">当前持仓</div>
+      <template #header>当前持仓</template>
       <el-table :data="data.open?.positions || []" size="small">
         <el-table-column prop="code" label="代码" width="80" />
         <el-table-column prop="name" label="名称" width="100" />
@@ -62,7 +62,7 @@
     </el-card>
 
     <el-card style="margin-top:16px">
-      <div slot="header">已平仓记录</div>
+      <template #header>已平仓记录</template>
       <el-table :data="data.closed?.trades || []" size="small">
         <el-table-column prop="code" label="代码" width="80" />
         <el-table-column prop="name" label="名称" width="100" />

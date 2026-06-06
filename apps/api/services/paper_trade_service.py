@@ -55,7 +55,7 @@ class PaperTradingService:
             })
             added += 1
 
-        return {"synced": added, "total": added + len(list(db.paper_positions.find({"status": "open"})))}
+        return {"synced": added, "total": db.paper_positions.count_documents({"status": "open"})}
 
     @staticmethod
     def sync_sell_rules() -> Dict[str, Any]:

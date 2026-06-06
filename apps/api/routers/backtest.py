@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Dict, Any
+from datetime import datetime
 from app.core.auth import AuthenticatedUser, get_current_user
 from tasks.backtest_tasks import run_simple_backtest
 from database import get_db
@@ -8,7 +9,7 @@ router = APIRouter(prefix="/backtest", tags=["回测"])
 
 
 @router.post("/run")
-async def submit_backtest(
+def submit_backtest(
     days_back: int = Query(180, ge=30, le=730),
     initial_cash: float = Query(100000, ge=10000),
     commission: float = Query(0.001, ge=0, le=0.05),
@@ -24,13 +25,23 @@ async def submit_backtest(
             max_stocks=max_stocks,
             max_positions=max_positions,
         )
+        # 预先写入进度记录，用于检测 Celery 是否存活
+        db = get_db()
+        db.backtest_progress.update_one(
+            {"_id": task.id},
+            {"$set": {
+                "status": "submitted", "submitted_at": datetime.now(),
+                "current": 0, "total": 0, "detail": ""
+            }},
+            upsert=True,
+        )
         return {"task_id": task.id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/task/{task_id}")
-async def get_task_status(task_id: str, current_user: AuthenticatedUser = Depends(get_current_user)):
+def get_task_status(task_id: str, current_user: AuthenticatedUser = Depends(get_current_user)):
     from celery.result import AsyncResult
     r = AsyncResult(task_id)
     resp = {"task_id": task_id, "status": r.status}
@@ -42,6 +53,13 @@ async def get_task_status(task_id: str, current_user: AuthenticatedUser = Depend
         db = get_db()
         prog = db.backtest_progress.find_one({"_id": task_id})
         if prog:
+            submitted_at = prog.get("submitted_at")
+            if submitted_at and r.status == "PENDING":
+                elapsed = (datetime.now() - submitted_at).total_seconds()
+                if elapsed > 30:
+                    resp["error"] = "Celery 工作进程未运行，请检查 celery worker 是否已启动"
+                    resp["status"] = "FAILURE"
+                    return resp
             prog.pop("_id", None)
             prog.pop("updated_at", None)
             resp["progress"] = prog
@@ -51,7 +69,7 @@ async def get_task_status(task_id: str, current_user: AuthenticatedUser = Depend
 
 
 @router.get("/latest")
-async def get_latest(current_user: AuthenticatedUser = Depends(get_current_user)):
+def get_latest(current_user: AuthenticatedUser = Depends(get_current_user)):
     db = get_db()
     doc = db.backtest_results.find_one({"_id": "latest"})
     if not doc:

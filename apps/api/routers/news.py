@@ -19,7 +19,9 @@ async def get_news(
     db = get_db()
 
     date_filter = {}
-    if period == "custom" and start_date and end_date:
+    if period == "custom":
+        if not start_date or not end_date:
+            raise HTTPException(status_code=400, detail="自定义时段需要提供 start_date 和 end_date")
         date_filter = {"showTime": {"$gte": start_date, "$lte": end_date + " 23:59:59"}}
     elif period == "7d":
         cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")

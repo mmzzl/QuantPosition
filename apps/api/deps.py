@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
+from bson import ObjectId
 
 from config.config import settings
 from app.core.auth import AuthenticatedUser
@@ -103,18 +104,20 @@ async def require_role_edit_permission(
     if not target_role:
         raise HTTPException(status_code=404, detail="角色不存在")
 
-    user = users_collection.find_one({"_id": current_user.user_id if isinstance(current_user.user_id, str) and len(current_user.user_id) == 24 else None})
-    if not user:
-        try:
-            from bson import ObjectId
-            user = users_collection.find_one({"_id": ObjectId(current_user.user_id)})
-        except Exception:
-            pass
-
+    user = users_collection.find_one({"_id": ObjectId(current_user.user_id)})
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
 
-    current_role_type = user.get("role", "normal_admin")
+    roles = RoleService.get_user_roles(current_user.user_id)
+    role_hierarchy = {"super_admin": 3, "system_admin": 2, "normal_admin": 1}
+    current_role_type = "user"
+    current_level = 0
+    for r in roles:
+        preset_key = r.get("preset_key")
+        level = role_hierarchy.get(preset_key, 0)
+        if level > current_level:
+            current_level = level
+            current_role_type = preset_key or "user"
 
     if not RoleService.can_edit_role(current_role_type, target_role):
         raise HTTPException(
