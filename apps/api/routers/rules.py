@@ -2,14 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional, List
 from pydantic import BaseModel
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.core.auth import AuthenticatedUser, get_current_user
 from database import get_db
 
 
 class ExploreRequest(BaseModel):
     phases: List[str] = ["template", "llm", "genetic"]
-from datetime import datetime, timedelta
+
 
 router = APIRouter(prefix="/rules", tags=["交易规则"])
 

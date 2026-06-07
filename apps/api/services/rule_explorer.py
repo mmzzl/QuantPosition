@@ -385,7 +385,7 @@ def call_llm_batch(rule_sets: List[dict], batch_size: int, settings: dict) -> Li
         {"validated": True, "composite_score": {"$gt": 0}}
     ).sort("composite_score", -1).limit(10))
 
-    ref_rules = random.sample(candidates, min(random.randint(10, 15), len(candidates)))
+    ref_rules = random.sample(rule_sets, min(random.randint(10, 15), len(rule_sets)))
     ref_text = "\n".join([
         f"- 买入:{r['buy_condition']} | 卖出:{r['sell_condition']} | 风控:{r['risk_condition']}"
         for r in ref_rules
