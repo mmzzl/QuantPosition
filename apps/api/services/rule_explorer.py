@@ -229,7 +229,7 @@ def try_insert_candidate(rule_set: dict) -> bool:
 
 
 def composite_score(sharpe: float, total_return: float, win_rate: float,
-                    trades: int, backtest_days: int = 180) -> float:
+                    trades: int, backtest_days: int = 360) -> float:
     """综合评分：夏普40% + 年化收益40% + 胜率20% (负夏普/负收益不再被忽略)"""
     if trades < 5:
         return -999
@@ -645,7 +645,7 @@ def _run_backtest_with_rules(rule_set: dict, stock_codes: List[str],
     ), result
 
 
-def validate_candidates(scope: str = "all", limit: int = 500, backtest_days: int = 180, max_stocks: int = 500):
+def validate_candidates(scope: str = "all", limit: int = 500, backtest_days: int = 360, max_stocks: int = 500):
     """验证候选规则：多时段回测取平均，不一致的规则降分。自动分批直到全部验证完成"""
     import pandas as pd
     from services.backtest_engine import sample_market_stocks

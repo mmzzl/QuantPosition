@@ -9,10 +9,10 @@
       <el-row :gutter="16">
         <el-col :span="5">
           <div class="label">回测天数</div>
-          <el-select v-model="daysBack" style="width:100%">
-            <el-option label="90 天" :value="90" />
+            <el-select v-model="daysBack" style="width:100%">
             <el-option label="180 天" :value="180" />
-            <el-option label="365 天" :value="365" />
+            <el-option label="360 天（推荐）" :value="360" />
+            <el-option label="730 天" :value="730" />
           </el-select>
         </el-col>
         <el-col :span="4">
@@ -108,7 +108,7 @@
 import { submitBacktest, getTaskStatus, getLatestBacktest } from '@/api/backtest'
 
 export default {
-  data() { return { daysBack: 180, cash: 100000, commission: 0.001, maxStocks: 500, maxPositions: 5, running: false, progress: null, result: null, pollTimer: null } },
+  data() { return { daysBack: 360, cash: 100000, commission: 0.001, maxStocks: 500, maxPositions: 5, running: false, progress: null, result: null, pollTimer: null } },
   async mounted() {
     try {
       const { data } = await getLatestBacktest()

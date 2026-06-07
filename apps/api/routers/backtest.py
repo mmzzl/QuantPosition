@@ -10,7 +10,7 @@ router = APIRouter(prefix="/backtest", tags=["回测"])
 
 @router.post("/run")
 def submit_backtest(
-    days_back: int = Query(180, ge=30, le=730),
+    days_back: int = Query(360, ge=30, le=730),
     initial_cash: float = Query(100000, ge=10000),
     commission: float = Query(0.001, ge=0, le=0.05),
     max_stocks: int = Query(500, ge=0, le=5000),

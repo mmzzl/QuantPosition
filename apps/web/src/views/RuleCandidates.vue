@@ -35,8 +35,8 @@
         <el-col :span="6">
           <div class="label">回测天数</div>
           <el-select v-model="validateDays" style="width:100%">
-            <el-option label="180 天（推荐）" :value="180" />
-            <el-option label="360 天" :value="360" />
+            <el-option label="180 天" :value="180" />
+            <el-option label="360 天（推荐）" :value="360" />
           </el-select>
         </el-col>
         <el-col :span="6">
@@ -148,7 +148,7 @@ const showBlacklist = ref(false)
 const blacklist = ref([])
 const filter = ref({ validation_round: null, source: null })
 const stats = ref({ total: 0, validated: 0, blacklist: 0, bestScore: 0 })
-const validateDays = ref(180)
+const validateDays = ref(360)
 const validateStocks = ref(500)
 
 function sourceType(s) { return { template: '', llm: 'success', genetic: 'warning' }[s] || 'info' }

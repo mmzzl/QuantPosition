@@ -36,7 +36,7 @@ export function startExplore(phases = ['template', 'llm', 'genetic']) {
   return http.post('/rules/explore', { phases })
 }
 
-export function startValidateCandidates(scope = 'all', limit = 500, backtest_days = 180, max_stocks = 500) {
+export function startValidateCandidates(scope = 'all', limit = 500, backtest_days = 360, max_stocks = 500) {
   return http.post('/rules/validate-candidates', { scope, limit, backtest_days, max_stocks })
 }
 

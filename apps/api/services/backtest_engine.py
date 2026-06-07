@@ -324,7 +324,7 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
                  celery_task=None, task_id=None, max_positions=5):
 
     if not start_date:
-        start_date = (datetime.now() - pd.Timedelta(days=180)).strftime("%Y-%m-%d")
+        start_date = (datetime.now() - pd.Timedelta(days=360)).strftime("%Y-%m-%d")
     if not end_date:
         end_date = datetime.now().strftime("%Y-%m-%d")
 

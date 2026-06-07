@@ -192,7 +192,7 @@ from tasks.rule_explore_tasks import run_rule_validation
 class ValidateRequest(BaseModel):
     scope: str = "all"
     limit: int = 500
-    backtest_days: int = 180
+    backtest_days: int = 360
     max_stocks: int = 500
 
 @router.post("/validate-candidates")

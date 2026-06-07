@@ -22,7 +22,7 @@ def _save(strategy: str, data: dict):
 def run_simple_backtest(
     self,
     strategy: str = "portfolio_rule_engine",
-    days_back: int = 180,
+    days_back: int = 360,
     initial_cash: float = 100000,
     commission: float = 0.001,
     max_stocks: int = 500,
