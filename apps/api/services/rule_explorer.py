@@ -315,32 +315,56 @@ def generate_template_rules() -> int:
 # Phase 2: LLM 批量生成
 # ============================================================
 
-LLM_SYSTEM_PROMPT = """你是一个股票交易规则专家。以下是系统中的变量和运算符：
+LLM_SYSTEM_PROMPT = """你是一个A股量化交易规则专家。你的任务是生成高夏普、高胜率的交易规则。
 
-变量：price(最新价), vol(成交量), ma5(5日均线), ma10(10日均线),
-      ma20(20日均线), ma60(60日均线), ma5_vol(5日均量),
-      last_close(昨收), high(20日最高), low(20日最低), open(开盘价),
-      has_pos(是否持仓), cost(持仓成本), buy_date(买入日期), today(今天),
-      rsi(RSI相对强弱0~100), atr(ATR真实波动幅度), adx(ADX趋势强度), amplitude(当日振幅)
+## 可用变量
+price(最新价), vol(成交量)
+ma5(5日均线), ma10(10日均线), ma20(20日均线), ma60(60日均线)
+ma5_vol(5日均量)
+last_close(昨收), high(20日最高), low(20日最低), open(开盘价)
+has_pos(是否持仓), cost(持仓成本), buy_date(买入日期), today(今天)
+rsi(RSI相对强弱0~100), atr(ATR真实波动幅度), adx(ADX趋势强度), amplitude(当日振幅)
 
-运算符：>, <, >=, <=, and, or, not
-函数：abs()
+运算符: > < >= <= and or not  函数: abs()
 
-常用规则模式：
-- 趋势过滤：ma5 > ma20 and ma20 > ma60（多头排列）
-- 趋势强度：adx > 25（趋势明确）
-- 超买过滤：rsi < 70（避免追高）
-- 动态止损：price < cost - 2 * atr
-- 振幅过滤：amplitude > 0.03（有流动性）
+## 评分标准（你的目标）
+夏普比率 ×40% + 年化收益 ×40% + 胜率 ×20%
+- 夏普 >1.5 = 优秀, >0.5 = 及格, <0 = 亏损
+- 年化 >30% = 优秀, >10% = 及格
+- 胜率 >60% = 优秀, >45% = 及格
+- 交易次数必须 >=10 次（否则直接 -999 分）
 
-要求：
-1. 语法正确，可被 Python eval() 执行
-2. 只使用上述变量，不使用其他变量
-3. 不使用属性访问
-4. 条件必须返回 True/False
-5. 每条规则必须包含买入、卖出、风控三个条件
-6. 尽量多样化：趋势跟踪、均值回归、量价配合、突破、回调等
-"""
+## 高夏普规则的特征（优先使用这些模式）
+1. 趋势跟踪（最容易出高夏普）:
+   - adx > 25（趋势确认）+ ma5 > ma20（方向）+ rsi < 70（避免追高）
+2. 均线多头排列:
+   - price > ma5 > ma10 > ma20（上升通道完整）
+3. 量价配合:
+   - price > ma5 and vol > ma5_vol * 1.2（价涨量增，可靠性高）
+4. RSI + 趋势过滤（胜率高）:
+   - rsi between 45~65 + ma5 > ma20（不超买的多头行情）
+5. 动态止损（保护收益）:
+   - has_pos and price < cost - 1.5 * atr（ATR动态止损比固定百分比更准）
+
+## 必须避免的模式（会直接给低分）
+✗ 单一变量条件: has_pos, price > 5（太简单，没有选择力）
+✗ 不可能比较: price < 0, amplitude < 0
+✗ 过窄范围: rsi > 55 and rsi < 58（几乎不会触发）
+✗ 价格和均线反着比: price < ma5 and ma5 > ma10（方向矛盾）
+✗ 只用一句话: 买入和卖出条件不要完全相同
+
+## 策略类型要求
+每条规则集必须包含买入、卖出、风控三个条件，三者形成一个完整逻辑。
+尽量多样化，覆盖以下类型（每批至少包含3-4种）：
+- 趋势跟踪（中长线持有）
+- 动量突破（短线爆发）
+- 回调低吸（RSI超卖反弹）
+- 量价背离（预警反转）
+
+## 输出格式
+返回 JSON 数组，每个元素: {"name": "中文名称", "buy_condition": "...", "sell_condition": "...", "risk_condition": "..."}
+
+只返回 JSON 数组，不要其他文字。"""
 
 
 def call_llm_batch(rule_sets: List[dict], batch_size: int, settings: dict) -> List[dict]:
@@ -355,15 +379,38 @@ def call_llm_batch(rule_sets: List[dict], batch_size: int, settings: dict) -> Li
     if not api_url or not api_key:
         raise ValueError("LLM 未配置")
 
+    db = get_db()
+    # 从候选池取 top 表现最佳（按评分降序）和随机样本作为参考
+    top = list(db.rule_candidates.find(
+        {"validated": True, "composite_score": {"$gt": 0}}
+    ).sort("composite_score", -1).limit(10))
+
+    ref_rules = random.sample(candidates, min(random.randint(10, 15), len(candidates)))
     ref_text = "\n".join([
         f"- 买入:{r['buy_condition']} | 卖出:{r['sell_condition']} | 风控:{r['risk_condition']}"
-        for r in rule_sets[:15]
+        for r in ref_rules
     ])
+
+    top_text = ""
+    if top:
+        top_text = "\n当前最佳规则参考（高评分）:\n" + "\n".join([
+            f"  [{r.get('composite_score',0)}分] 买入:{r['buy_condition']} | 卖出:{r['sell_condition']} | 风控:{r['risk_condition']}"
+            for r in top
+        ])
 
     user_msg = f"""请基于以下 {len(rule_sets)} 条规则集，生成 {batch_size} 条变异版本。
 
 输入规则集：
 {ref_text}
+{top_text}
+
+要求：
+1. 每条规则集必须包含买入、卖出、风控三个条件
+2. 买入条件要合理（能选出好股票），卖出条件要保收益
+3. 风控条件必须用到 cost 或 atr（否则无效）
+4. 避免太简单的条件（如 has_pos 单独作为条件）
+5. 买入和卖出条件不能完全相同
+6. 确保返回 {batch_size} 条不同的规则集
 
 请返回 JSON 数组，每个元素包含：
 - buy_condition: 买入条件
@@ -371,7 +418,7 @@ def call_llm_batch(rule_sets: List[dict], batch_size: int, settings: dict) -> Li
 - risk_condition: 风控条件
 - name: 规则名称（简短中文描述）
 
-只返回 JSON 数组，不要其他文字。确保返回 {batch_size} 条不同的规则集。"""
+只返回 JSON 数组，不要其他文字。"""
 
     client = OpenAI(base_url=api_url, api_key=api_key)
 

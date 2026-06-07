@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
+from typing import Optional, List
 from pydantic import BaseModel
 from bson import ObjectId
+from datetime import datetime
 from app.core.auth import AuthenticatedUser, get_current_user
-from services.rule_service import RuleService
 from database import get_db
+
+
+class ExploreRequest(BaseModel):
+    phases: List[str] = ["template", "llm", "genetic"]
 from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/rules", tags=["交易规则"])
@@ -166,6 +170,7 @@ from tasks.rule_explore_tasks import run_rule_exploration
 
 @router.post("/explore")
 async def start_explore(
+    data: ExploreRequest,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
     db = get_db()
@@ -175,10 +180,10 @@ async def start_explore(
         raise HTTPException(status_code=409, detail="已有探索任务在运行中，请等待完成")
 
     settings = db.system_settings.find_one({"_id": "global"}) or {}
-    if not settings.get("llm_api_key"):
-        raise HTTPException(status_code=400, detail="请先在系统设置中配置 LLM API Key")
+    if "llm" in data.phases and not settings.get("llm_api_key"):
+        raise HTTPException(status_code=400, detail="LLM 阶段需要先配置 LLM API Key")
 
-    task = run_rule_exploration.delay()
+    task = run_rule_exploration.delay(data.phases)
     return {"task_id": task.id, "message": "探索任务已启动"}
 
 

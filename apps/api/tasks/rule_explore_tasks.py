@@ -5,12 +5,15 @@ from datetime import datetime
 
 
 @celery_app.task(bind=True, name="rule_exploration")
-def run_rule_exploration(self):
+def run_rule_exploration(self, phases: list = None):
     """规则探索主任务：模板搜索 → LLM生成 → 遗传算法"""
     from services.rule_explorer import (
         generate_template_rules, generate_llm_rules, generate_genetic_rules,
         update_progress
     )
+
+    if phases is None:
+        phases = ["template", "llm", "genetic"]
 
     db = get_db()
 
@@ -22,8 +25,8 @@ def run_rule_exploration(self):
         {"_id": "current"},
         {"$set": {
             "status": "running",
-            "phase": "template",
-            "phase_label": "模板网格搜索",
+            "phase": phases[0] if phases else "done",
+            "phase_label": f"规则探索 ({', '.join(phases)})",
             "task_id": self.request.id,
             "error_msg": "",
             "updated_at": datetime.now(),
@@ -31,16 +34,21 @@ def run_rule_exploration(self):
         upsert=True
     )
 
+    template_count = llm_count = genetic_count = 0
+
     try:
-        template_count = generate_template_rules()
+        if "template" in phases:
+            template_count = generate_template_rules()
 
-        try:
-            llm_count = generate_llm_rules()
-        except ValueError as e:
-            logging.warning(f"[EXPLORE] LLM 跳过: {e}")
-            llm_count = 0
+        if "llm" in phases:
+            try:
+                llm_count = generate_llm_rules()
+            except ValueError as e:
+                logging.warning(f"[EXPLORE] LLM 跳过: {e}")
+                llm_count = 0
 
-        genetic_count = generate_genetic_rules()
+        if "genetic" in phases:
+            genetic_count = generate_genetic_rules()
 
         total = db.rule_candidates.count_documents({})
         update_progress("done", "探索完成", candidates_count=total, status="done")
