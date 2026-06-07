@@ -36,8 +36,8 @@ export function startExplore() {
   return http.post('/rules/explore')
 }
 
-export function startValidateCandidates(scope = 'all', limit = 500) {
-  return http.post('/rules/validate-candidates', { scope, limit })
+export function startValidateCandidates(scope = 'all', limit = 500, backtest_days = 360, max_stocks = 500) {
+  return http.post('/rules/validate-candidates', { scope, limit, backtest_days, max_stocks })
 }
 
 export function applyCandidates() {

@@ -3,7 +3,6 @@
     <div class="page-header">
       <h2>候选规则池</h2>
       <div>
-        <el-button @click="handleValidate" :loading="validating">验证规则</el-button>
         <el-button type="primary" @click="handleApply" :loading="applying">一键更新规则</el-button>
         <el-button @click="showBlacklist = true">查看黑名单</el-button>
         <el-button type="danger" @click="handleClear">清空候选</el-button>
@@ -27,6 +26,30 @@
         <el-col :span="6">
           <div class="stat-label">最优评分</div>
           <div class="stat-value">{{ stats.bestScore }}</div>
+        </el-col>
+      </el-row>
+    </el-card>
+
+    <el-card style="margin-bottom: 16px">
+      <el-row :gutter="16">
+        <el-col :span="6">
+          <div class="label">回测天数</div>
+          <el-select v-model="validateDays" style="width:100%">
+            <el-option label="180 天" :value="180" />
+            <el-option label="360 天" :value="360" />
+            <el-option label="720 天" :value="720" />
+          </el-select>
+        </el-col>
+        <el-col :span="6">
+          <div class="label">候选股票数</div>
+          <el-select v-model="validateStocks" style="width:100%">
+            <el-option label="100 只（快速）" :value="100" />
+            <el-option label="300 只" :value="300" />
+            <el-option label="500 只（推荐）" :value="500" />
+          </el-select>
+        </el-col>
+        <el-col :span="6" :offset="6" style="display:flex;align-items:flex-end">
+          <el-button @click="handleValidate" :loading="validating" style="width:100%">验证规则</el-button>
         </el-col>
       </el-row>
     </el-card>
@@ -125,6 +148,8 @@ const showBlacklist = ref(false)
 const blacklist = ref([])
 const filter = ref({ validation_round: null, source: null })
 const stats = ref({ total: 0, validated: 0, blacklist: 0, bestScore: 0 })
+const validateDays = ref(360)
+const validateStocks = ref(500)
 
 function sourceType(s) { return { template: '', llm: 'success', genetic: 'warning' }[s] || 'info' }
 
@@ -186,7 +211,7 @@ async function handleClear() {
 async function handleValidate() {
   validating.value = true
   try {
-    await startValidateCandidates('all', 500)
+    await startValidateCandidates('all', 500, validateDays.value, validateStocks.value)
     ElMessage.success('验证任务已启动')
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '启动验证失败')
@@ -240,4 +265,5 @@ onMounted(() => {
 .page-header h2 { margin: 0; }
 .stat-label { font-size: 12px; color: #909399; }
 .stat-value { font-size: 24px; font-weight: bold; margin-top: 4px; }
+.label { font-size: 12px; color: #909399; margin-bottom: 4px; }
 </style>
