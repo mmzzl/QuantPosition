@@ -60,7 +60,7 @@ def run_rule_exploration(self):
 
 
 @celery_app.task(bind=True, name="rule_validation")
-def run_rule_validation(self, scope: str = "all", limit: int = 500, backtest_days: int = 360):
+def run_rule_validation(self, scope: str = "all", limit: int = 500, backtest_days: int = 360, max_stocks: int = 500):
     """验证候选规则任务"""
     from services.rule_explorer import validate_candidates
 
@@ -78,7 +78,7 @@ def run_rule_validation(self, scope: str = "all", limit: int = 500, backtest_day
     )
 
     try:
-        validate_candidates(scope, limit=limit, backtest_days=backtest_days)
+        validate_candidates(scope, limit=limit, backtest_days=backtest_days, max_stocks=max_stocks)
         db.rule_explore_progress.update_one(
             {"_id": "current"},
             {"$set": {"status": "done", "phase": "done", "phase_label": "验证完成"}}

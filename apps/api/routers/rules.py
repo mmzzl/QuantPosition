@@ -188,13 +188,14 @@ class ValidateRequest(BaseModel):
     scope: str = "all"
     limit: int = 500
     backtest_days: int = 360
+    max_stocks: int = 500
 
 @router.post("/validate-candidates")
 async def start_validate(
     data: ValidateRequest,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
-    task = run_rule_validation.delay(data.scope, data.limit, data.backtest_days)
+    task = run_rule_validation.delay(data.scope, data.limit, data.backtest_days, data.max_stocks)
     return {"task_id": task.id, "message": "验证任务已启动"}
 
 
