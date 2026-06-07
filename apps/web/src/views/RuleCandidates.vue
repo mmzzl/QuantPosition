@@ -46,6 +46,7 @@
             <el-option label="100 只（快速）" :value="100" />
             <el-option label="300 只" :value="300" />
             <el-option label="500 只（推荐）" :value="500" />
+            <el-option label="全市场" :value="0" />
           </el-select>
         </el-col>
         <el-col :span="6" :offset="6" style="display:flex;align-items:flex-end">

@@ -45,7 +45,7 @@ def sample_market_stocks(n: int = 500, seed: int = None) -> List[str]:
         rng.shuffle(result)
     else:
         random.shuffle(result)
-    valid_codes = [d["_id"] for d in result[:n]]
+    valid_codes = [d["_id"] for d in result[:n]] if n > 0 else [d["_id"] for d in result]
 
     return valid_codes
 
