@@ -621,7 +621,7 @@ def validate_candidates(scope: str = "all", limit: int = 500, backtest_days: int
     if backtest_days < periods:
         backtest_days = periods * 30
     period_days = backtest_days // periods
-    stock_codes = sample_market_stocks(300)
+    stock_codes = sample_market_stocks(500, seed=42)
     total_validated = 0
     batch_no = 0
 

@@ -22,7 +22,7 @@ def _load_name_map(force=False):
     return _name_map_cache
 
 
-def sample_market_stocks(n: int = 500) -> List[str]:
+def sample_market_stocks(n: int = 500, seed: int = None) -> List[str]:
     """从全市场抽样 n 只股票（排除ST、300、301、688），和实盘完全一致"""
     db = get_db()
 
@@ -34,14 +34,17 @@ def sample_market_stocks(n: int = 500) -> List[str]:
                 and not name_map.get(c, "").startswith(("ST", "*ST"))
                 and not c.startswith(("300", "301", "688"))]
 
-    # 一条聚合查完所有计数量，替代逐个 count_documents
     pipeline = [
         {"$match": {"code": {"$in": filtered}, "frequency": 9}},
         {"$group": {"_id": "$code", "count": {"$sum": 1}}},
         {"$match": {"count": {"$gte": 20}}},
     ]
     result = list(db.stock_kline.aggregate(pipeline, allowDiskUse=True))
-    random.shuffle(result)
+    if seed is not None:
+        rng = random.Random(seed)
+        rng.shuffle(result)
+    else:
+        random.shuffle(result)
     valid_codes = [d["_id"] for d in result[:n]]
 
     return valid_codes
@@ -332,7 +335,7 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
 
     if not codes:
         if max_stocks > 0:
-            codes = sample_market_stocks(max_stocks)
+            codes = sample_market_stocks(max_stocks, seed=42)
             logging.info(f"[BACKTEST] 从指数成分股中抽样 {len(codes)} 只")
         else:
             codes = db.stock_kline.distinct("code", {"frequency": 9})
