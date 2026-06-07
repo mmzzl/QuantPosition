@@ -37,6 +37,12 @@ def run_rule_exploration(self, phases: list = None):
     template_count = llm_count = genetic_count = 0
 
     try:
+        # 如果选了 genetic 但候选池为空，自动先跑 template 播种
+        if "genetic" in phases and "template" not in phases:
+            if db.rule_candidates.count_documents({}) == 0:
+                logging.info("[EXPLORE] 候选池为空，自动执行 template 播种")
+                generate_template_rules()
+
         if "template" in phases:
             template_count = generate_template_rules()
 

@@ -108,6 +108,12 @@ def _load_aligned_klines(codes, start, end):
 
         df = df.reindex(stock_dates)
         df = df.ffill()
+
+        # 停牌检测：连续 10+ 根 high==low（ffill 导致的停牌期假数据）
+        if (df['high'] == df['low']).rolling(10).sum().max() >= 10:
+            del result[code]
+            continue
+
         result[code] = df
 
     logging.info(f"[ALIGN] 对齐完成, 有效股票 {len(result)} 只, 耗时 {time.time()-t3:.1f}s")

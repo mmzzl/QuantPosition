@@ -5,6 +5,7 @@ from bson import ObjectId
 from datetime import datetime, timedelta
 from app.core.auth import AuthenticatedUser, get_current_user
 from database import get_db
+from services.rule_service import RuleService
 
 
 class ExploreRequest(BaseModel):

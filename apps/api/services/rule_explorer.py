@@ -380,29 +380,29 @@ def call_llm_batch(rule_sets: List[dict], batch_size: int, settings: dict) -> Li
         raise ValueError("LLM 未配置")
 
     db = get_db()
-    # 从候选池取 top 表现最佳（按评分降序）和随机样本作为参考
+
+    ref_text = ""
+    if rule_sets:
+        ref_rules = random.sample(rule_sets, min(random.randint(10, 15), len(rule_sets)))
+        ref_text = "参考规则集：\n" + "\n".join([
+            f"- 买入:{r['buy_condition']} | 卖出:{r['sell_condition']} | 风控:{r['risk_condition']}"
+            for r in ref_rules
+        ])
+
+    top_text = ""
     top = list(db.rule_candidates.find(
         {"validated": True, "composite_score": {"$gt": 0}}
     ).sort("composite_score", -1).limit(10))
-
-    ref_rules = random.sample(rule_sets, min(random.randint(10, 15), len(rule_sets)))
-    ref_text = "\n".join([
-        f"- 买入:{r['buy_condition']} | 卖出:{r['sell_condition']} | 风控:{r['risk_condition']}"
-        for r in ref_rules
-    ])
-
-    top_text = ""
     if top:
         top_text = "\n当前最佳规则参考（高评分）:\n" + "\n".join([
             f"  [{r.get('composite_score',0)}分] 买入:{r['buy_condition']} | 卖出:{r['sell_condition']} | 风控:{r['risk_condition']}"
             for r in top
         ])
 
-    user_msg = f"""请基于以下 {len(rule_sets)} 条规则集，生成 {batch_size} 条变异版本。
+    if rule_sets:
+        user_msg = f"""请基于以下规则集，生成 {batch_size} 条变异版本。
 
-输入规则集：
-{ref_text}
-{top_text}
+{ref_text}{top_text}
 
 要求：
 1. 每条规则集必须包含买入、卖出、风控三个条件
@@ -411,6 +411,27 @@ def call_llm_batch(rule_sets: List[dict], batch_size: int, settings: dict) -> Li
 4. 避免太简单的条件（如 has_pos 单独作为条件）
 5. 买入和卖出条件不能完全相同
 6. 确保返回 {batch_size} 条不同的规则集
+
+请返回 JSON 数组，每个元素包含：
+- buy_condition: 买入条件
+- sell_condition: 卖出条件
+- risk_condition: 风控条件
+- name: 规则名称（简短中文描述）
+
+只返回 JSON 数组，不要其他文字。"""
+    else:
+        user_msg = f"""请根据系统提示词中的高夏普模式，从头生成 {batch_size} 条不同的完整规则集。
+
+{top_text}
+
+要求：
+1. 每条规则集必须包含买入、卖出、风控三个条件
+2. 买入条件要合理（能选出好股票），卖出条件要保收益
+3. 风控条件必须用到 cost 或 atr（否则无效）
+4. 避免太简单的条件（如 has_pos 单独作为条件）
+5. 买入和卖出条件不能完全相同
+6. 覆盖多种策略类型：趋势跟踪、动量突破、回调低吸、量价配合
+7. 确保返回 {batch_size} 条不同的规则集
 
 请返回 JSON 数组，每个元素包含：
 - buy_condition: 买入条件
@@ -472,16 +493,14 @@ def generate_llm_rules(batch_size: int = 100, total_calls: int = 10) -> int:
         raise ValueError("请先在系统设置中配置 LLM API Key")
 
     candidates = list(db.rule_candidates.aggregate([{"$sample": {"size": 200}}]))
-    if not candidates:
-        logging.warning("[EXPLORE] 候选池为空，跳过 LLM 生成")
-        return 0
+    has_candidates = len(candidates) > 0
 
     batch_size = settings.get("llm_batch_size", batch_size)
     count = 0
     update_progress("llm", "LLM批量优化", llm_total=total_calls)
 
     for i in range(total_calls):
-        ref_rules = random.sample(candidates, min(random.randint(10, 15), len(candidates)))
+        ref_rules = random.sample(candidates, min(random.randint(10, 15), len(candidates))) if has_candidates else []
 
         try:
             new_rules = call_llm_batch(ref_rules, batch_size, settings)
