@@ -645,7 +645,7 @@ def _run_backtest_with_rules(rule_set: dict, stock_codes: List[str],
     ), result
 
 
-def validate_candidates(scope: str = "all", limit: int = 500, backtest_days: int = 360, max_stocks: int = 500):
+def validate_candidates(scope: str = "all", limit: int = 500, backtest_days: int = 180, max_stocks: int = 500):
     """验证候选规则：多时段回测取平均，不一致的规则降分。自动分批直到全部验证完成"""
     import pandas as pd
     from services.backtest_engine import sample_market_stocks

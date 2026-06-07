@@ -68,7 +68,7 @@ def run_rule_exploration(self, phases: list = None):
 
 
 @celery_app.task(bind=True, name="rule_validation")
-def run_rule_validation(self, scope: str = "all", limit: int = 500, backtest_days: int = 360, max_stocks: int = 500):
+def run_rule_validation(self, scope: str = "all", limit: int = 500, backtest_days: int = 180, max_stocks: int = 500):
     """验证候选规则任务"""
     from services.rule_explorer import validate_candidates
 
