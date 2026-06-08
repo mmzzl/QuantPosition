@@ -4,6 +4,7 @@ import logging
 import random
 from datetime import datetime
 from typing import Dict, Any, List
+import numpy as np
 from database import get_db
 
 
@@ -108,16 +109,157 @@ def _load_aligned_klines(codes, start, end):
 
         df = df.reindex(stock_dates)
         df = df.ffill()
-
-        # 停牌检测：连续 10+ 根 high==low（ffill 导致的停牌期假数据）
-        if (df['high'] == df['low']).rolling(10).sum().max() >= 10:
-            del result[code]
-            continue
-
         result[code] = df
 
     logging.info(f"[ALIGN] 对齐完成, 有效股票 {len(result)} 只, 耗时 {time.time()-t3:.1f}s")
     return result
+
+
+def _compute_adx_per_bar(highs, lows, closes, period=14):
+    """Compute ADX at every bar position. Returns array same length as closes.
+    Uses Wilder's smoothing, matching rule_engine calc_adx logic.
+    """
+    n = len(closes)
+    result = np.full(n, np.nan)
+    if n < period * 2:
+        return result
+
+    m = n - 1
+    tr = np.zeros(m)
+    plus_dm = np.zeros(m)
+    minus_dm = np.zeros(m)
+
+    for i in range(m):
+        idx = i + 1
+        tr[i] = max(highs[idx] - lows[idx],
+                    abs(highs[idx] - closes[idx-1]),
+                    abs(lows[idx] - closes[idx-1]))
+        up_move = highs[idx] - highs[idx-1]
+        down_move = lows[idx-1] - lows[idx]
+        plus_dm[i] = up_move if up_move > down_move and up_move > 0 else 0
+        minus_dm[i] = down_move if down_move > up_move and down_move > 0 else 0
+
+    s_tr = np.zeros(m)
+    s_plus = np.zeros(m)
+    s_minus = np.zeros(m)
+
+    s_tr[period-1] = np.mean(tr[:period])
+    s_plus[period-1] = np.mean(plus_dm[:period])
+    s_minus[period-1] = np.mean(minus_dm[:period])
+
+    for i in range(period, m):
+        s_tr[i] = (s_tr[i-1] * (period-1) + tr[i]) / period
+        s_plus[i] = (s_plus[i-1] * (period-1) + plus_dm[i]) / period
+        s_minus[i] = (s_minus[i-1] * (period-1) + minus_dm[i]) / period
+
+    dx_vals = []
+    for i in range(period-1, m):
+        if s_tr[i] <= 0:
+            continue
+        pdi = 100.0 * s_plus[i] / s_tr[i]
+        mdi = 100.0 * s_minus[i] / s_tr[i]
+        if pdi + mdi <= 0:
+            continue
+        dx_vals.append((i+1, 100.0 * abs(pdi - mdi) / (pdi + mdi)))
+
+    if len(dx_vals) >= period:
+        adx_val = sum(dx[1] for dx in dx_vals[:period]) / period
+        result[dx_vals[period-1][0]] = adx_val
+        for dx in dx_vals[period:]:
+            adx_val = (adx_val * (period-1) + dx[1]) / period
+            result[dx[0]] = adx_val
+
+    return result
+
+
+def _precompute_buy_candidates(stock_dfs, codes_with_data, engine, name_map, all_dates_set, latest_start, end_date):
+    """Pre-compute buy signals for every (stock, bar) pair.
+    Returns {bar_idx: [(buy_score, code), ...]} where bar_idx is 0-indexed
+    in the backtrader timeline starting from latest_start.
+    """
+    from bin.rule_engine import StockRuleEngine
+
+    end_ts = pd.Timestamp(end_date)
+    dates = sorted(d for d in all_dates_set if latest_start <= d <= end_ts)
+
+    bar_candidates = {}
+
+    for code in codes_with_data:
+        df = stock_dfs[code]
+
+        di = pd.DataFrame(index=df.index)
+        di['close'] = df['close'].astype(float)
+        di['volume'] = df['volume'].astype(float)
+        di['ma5'] = df['close'].astype(float).rolling(5).mean()
+        di['ma10'] = df['close'].astype(float).rolling(10).mean()
+        di['ma20'] = df['close'].astype(float).rolling(20).mean()
+        di['ma60'] = df['close'].astype(float).rolling(60).mean()
+        di['ma5_vol'] = df['volume'].astype(float).rolling(5).mean()
+        di['high20'] = df['high'].astype(float).rolling(20).max()
+        di['low20'] = df['low'].astype(float).rolling(20).min()
+        di['last_close'] = df['close'].astype(float).shift(1)
+        prev = di['last_close']
+        di['amplitude'] = ((df['high'].astype(float) - df['low'].astype(float))
+                           / prev.where(prev > 0, 1)).fillna(0)
+        di['open'] = df['open'].astype(float)
+        di['name'] = name_map.get(code, "")
+
+        # RSI (SMA-based, matching rule_engine calc_rsi)
+        delta = df['close'].astype(float).diff()
+        gains = delta.clip(lower=0)
+        losses = (-delta).clip(lower=0)
+        avg_gain = gains.rolling(14).mean()
+        avg_loss = losses.rolling(14).mean()
+        rs = avg_gain / avg_loss.where(avg_loss > 0, np.nan)
+        di['rsi'] = 100.0 - 100.0 / (1.0 + rs)
+        di['rsi'] = di['rsi'].fillna(100.0)
+        di.loc[avg_gain == 0, 'rsi'] = 0.0
+
+        # ATR (SMA-based, matching rule_engine calc_atr)
+        tr = pd.concat([
+            df['high'].astype(float) - df['low'].astype(float),
+            (df['high'].astype(float) - df['close'].astype(float).shift()).abs(),
+            (df['low'].astype(float) - df['close'].astype(float).shift()).abs()
+        ], axis=1).max(axis=1)
+        di['atr'] = tr.rolling(14).mean()
+
+        # ADX (Wilder's, matching rule_engine calc_adx)
+        di['adx'] = _compute_adx_per_bar(
+            df['high'].values.astype(float),
+            df['low'].values.astype(float),
+            df['close'].values.astype(float)
+        )
+
+        for bar_idx, dt in enumerate(dates):
+            if dt not in di.index:
+                continue
+            row = di.loc[dt]
+            if pd.isna(row['ma60']):
+                continue
+
+            stock_data = {
+                "close": row['close'], "volume": row['volume'],
+                "ma5": row['ma5'], "ma10": row['ma10'],
+                "ma20": row['ma20'], "ma60": row['ma60'],
+                "ma5_vol": row['ma5_vol'],
+                "last_close": row['last_close'] if not pd.isna(row['last_close']) else row['close'],
+                "high": row['high20'], "low": row['low20'],
+                "open": row['open'], "name": row['name'],
+                "rsi": row['rsi'], "atr": row['atr'] if not pd.isna(row['atr']) else 0,
+                "adx": row['adx'] if not pd.isna(row['adx']) else 25,
+                "amplitude": row['amplitude'],
+            }
+            ctx = StockRuleEngine.build_context(stock_data, {
+                "has_pos": False, "cost": 0, "buy_date": None, "today": dt
+            })
+            _, _, buy_score, _ = engine.run(ctx)
+            if buy_score > 0:
+                bar_candidates.setdefault(bar_idx, []).append((buy_score, code))
+
+    for bar_idx in bar_candidates:
+        bar_candidates[bar_idx].sort(key=lambda x: x[0], reverse=True)
+
+    return bar_candidates
 
 
 class PortfolioRuleStrategy(bt.Strategy):
@@ -128,6 +270,7 @@ class PortfolioRuleStrategy(bt.Strategy):
         max_hold_days=60, cooldown_days=3, stop_loss_pct=0.08,
         max_positions=5, start_date_str=None,
         task_id=None, bars_total=0,
+        buy_candidates=None,
     )
 
     def __init__(self):
@@ -155,7 +298,7 @@ class PortfolioRuleStrategy(bt.Strategy):
                 'sma_vol5': bt.indicators.SMA(d.volume, period=5),
                 'high20': bt.indicators.Highest(d.high, period=20),
                 'low20': bt.indicators.Lowest(d.low, period=20),
-                'rsi': bt.indicators.RSI(d.close, period=14),
+                'rsi': bt.indicators.RSI_Safe(d.close, period=14),
                 'atr': bt.indicators.ATR(d, period=14),
                 'adx': bt.indicators.ADX(d, period=14),
             }
@@ -170,11 +313,12 @@ class PortfolioRuleStrategy(bt.Strategy):
         self._bar_count = 0
         self._bars_total = self.p.bars_total or 0
         self._next_progress_pct = 5
+        self._code_index = {code: i for i, code in enumerate(self.codes)}
+        self._buy_candidates = self.p.buy_candidates or {}
 
     def _ctx(self, code, has_pos, cost, buy_date, today):
         from bin.rule_engine import StockRuleEngine
-        i = self.codes.index(code)
-        d = self.datas[i]
+        d = self.datas[self._code_index[code]]
         ind = self.indicators[code]
 
         last_close = d.close[-1] if len(d) > 1 else d.close[0]
@@ -209,8 +353,7 @@ class PortfolioRuleStrategy(bt.Strategy):
         try:
             # ==== 第一步：卖出 ====
             for code in list(self.entry_prices.keys()):
-                i = self.codes.index(code)
-                d = self.datas[i]
+                d = self.datas[self._code_index[code]]
                 hold_days = (dt - self.entry_dates[code]).days
 
                 if hold_days < 1:
@@ -257,36 +400,34 @@ class PortfolioRuleStrategy(bt.Strategy):
                     del self.entry_dates[code]
                     self.last_exit_dates[code] = dt
 
-            # ==== 第二步：买入 ====
+            # ==== 第二步：买入（使用预计算信号） ====
             if len(self.entry_prices) >= self.p.max_positions:
                 return
 
+            bar_idx = self._bar_count - 1
+            pre_list = self._buy_candidates.get(bar_idx, [])
+
             buy_candidates = []
-            for i, code in enumerate(self.codes):
+            for buy_score, code in pre_list:
                 if code in self.entry_prices:
                     continue
                 if code in self.last_exit_dates and (dt - self.last_exit_dates[code]).days < self.p.cooldown_days:
                     continue
-                if self.datas[i].close[0] <= 0:
+                if self.datas[self._code_index[code]].close[0] <= 0:
                     continue
-
-                ctx = self._ctx(code, False, 0, None, dt)
-                _, _, buy_score, triggered = self.engine.run(ctx)
-                if buy_score > 0:
-                    buy_candidates.append((buy_score, code, triggered))
+                buy_candidates.append((buy_score, code))
 
             if not buy_candidates:
                 return
 
-            buy_candidates.sort(key=lambda x: x[0], reverse=True)
             available_cash = self.broker.getcash()
             current_positions = len(self.entry_prices)
 
-            for buy_score, code, triggered in buy_candidates:
+            for buy_score, code in buy_candidates:
                 if current_positions >= self.p.max_positions:
                     break
 
-                d = self.datas[self.codes.index(code)]
+                d = self.datas[self._code_index[code]]
                 price = d.close[0]
                 if price <= 0:
                     continue
@@ -334,7 +475,7 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
     if not end_date:
         end_date = datetime.now().strftime("%Y-%m-%d")
 
-    warmup_days = 30
+    warmup_days = 60
     load_start = (pd.Timestamp(start_date) - pd.Timedelta(days=warmup_days)).strftime("%Y-%m-%d")
 
     db = get_db()
@@ -393,6 +534,28 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
     else:
         bars_total = 0
 
+    # 预计算买入信号
+    from bin.rule_engine import StockRuleEngine
+    if custom_rules is not None:
+        pre_engine = StockRuleEngine(custom_rules)
+    else:
+        pre_engine = StockRuleEngine(list(
+            db.trading_rules.find({"enabled": True}).sort("rule_id", 1)
+        ))
+
+    if task_id:
+        _update_progress(task_id, 0, len(codes_with_data), "预计算买入信号...",
+                         f"{len(codes_with_data)} 只股票, {bars_total} 个交易日")
+    buy_candidates = _precompute_buy_candidates(
+        stock_dfs, codes_with_data, pre_engine, name_map,
+        all_dates, latest_start, end_date
+    )
+    signal_count = sum(len(v) for v in buy_candidates.values())
+    logging.info(f"[BACKTEST] 预计算完成: {signal_count} 个买入候选信号")
+
+    if task_id:
+        _update_progress(task_id, 0, bars_total, "运行组合回测...", f"预计算 {signal_count} 个候选信号")
+
     cerebro = bt.Cerebro()
     cerebro.addstrategy(PortfolioRuleStrategy,
                         stock_codes=codes_with_data,
@@ -401,7 +564,8 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
                         max_positions=max_positions,
                         start_date_str=start_date,
                         task_id=task_id,
-                        bars_total=bars_total)
+                        bars_total=bars_total,
+                        buy_candidates=buy_candidates)
 
     for code in codes_with_data:
         cerebro.adddata(bt.feeds.PandasData(dataname=stock_dfs[code]))
@@ -409,13 +573,16 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
     cerebro.broker.setcash(initial_cash)
     cerebro.broker.setcommission(commission=commission)
 
+    logging.disable(logging.INFO)
     try:
         strat = cerebro.run()[0]
     except Exception as e:
+        logging.disable(logging.NOTSET)
         logging.error(f"[BACKTEST] 回测执行失败: {e}")
         if task_id:
             _update_progress(task_id, 0, 0, "回测失败", str(e))
         return {"strategy": strategy_name, "trades": 0, "processed": 0, "skipped": len(filtered), "error": str(e)}
+    logging.disable(logging.NOTSET)
 
     all_trades = strat.trade_log
     end_value = cerebro.broker.getvalue()

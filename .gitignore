@@ -14,3 +14,4 @@ logs/*
 .pid
 apps/api/logs/*
 apps/api/var/run/*
+apps/api/bin/spider_progress.json

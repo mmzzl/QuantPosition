@@ -42,29 +42,62 @@ def submit_backtest(
 
 @router.get("/task/{task_id}")
 def get_task_status(task_id: str, current_user: AuthenticatedUser = Depends(get_current_user)):
-    from celery.result import AsyncResult
-    r = AsyncResult(task_id)
-    resp = {"task_id": task_id, "status": r.status}
-    if r.status == "SUCCESS":
-        resp["result"] = r.result
-    elif r.status == "FAILURE":
-        resp["error"] = str(r.result)
-    else:
-        db = get_db()
-        prog = db.backtest_progress.find_one({"_id": task_id})
-        if prog:
-            submitted_at = prog.get("submitted_at")
-            if submitted_at and r.status == "PENDING":
-                elapsed = (datetime.now() - submitted_at).total_seconds()
-                if elapsed > 30:
-                    resp["error"] = "Celery 工作进程未运行，请检查 celery worker 是否已启动"
-                    resp["status"] = "FAILURE"
-                    return resp
-            prog.pop("_id", None)
-            prog.pop("updated_at", None)
-            resp["progress"] = prog
+    db = get_db()
+    resp = {"task_id": task_id}
+
+    # MongoDB 进度是真实状态，优先于 Celery
+    prog = db.backtest_progress.find_one({"_id": task_id})
+    if not prog:
+        resp["status"] = "PENDING"
+        resp["progress"] = {"current": 0, "total": 0, "status": "等待中...", "detail": ""}
+        return resp
+
+    prog_status = prog.get("status", "")
+    submitted_at = prog.get("submitted_at")
+
+    if prog_status in ("回测失败", "error"):
+        resp["status"] = "FAILURE"
+        resp["error"] = prog.get("detail", "回测执行失败")
+        return resp
+
+    if prog_status == "回测完成":
+        # 任务已完成，从 Celery 取结果（如果有）或从 latest 快照取
+        from celery.result import AsyncResult
+        r = AsyncResult(task_id)
+        if r.status == "SUCCESS":
+            resp["status"] = "SUCCESS"
+            resp["result"] = r.result
         else:
-            resp["progress"] = {"current": 0, "total": 0, "status": "等待中...", "detail": ""}
+            # 无 result backend 时从 latest 快照读取
+            latest = db.backtest_results.find_one({"_id": "latest"})
+            if latest:
+                latest.pop("_id", None)
+                latest.pop("saved_at", None)
+                resp["status"] = "SUCCESS"
+                resp["result"] = latest
+            else:
+                resp["status"] = "SUCCESS"
+                resp["result"] = {"trades": 0, "portfolio_return": 0, "processed": prog.get("total", 0), "skipped": 0}
+        return resp
+
+    # 任务还在运行
+    if submitted_at and not prog_status.startswith(("回测", "error")):
+        from celery.result import AsyncResult
+        r = AsyncResult(task_id)
+        if r.status == "PENDING":
+            elapsed = (datetime.now() - submitted_at).total_seconds()
+            if elapsed > 30:
+                resp["status"] = "FAILURE"
+                resp["error"] = "Celery 工作进程未运行，请检查 celery worker 是否已启动"
+                return resp
+
+    resp["status"] = "RUNNING"
+    resp["progress"] = {
+        "current": prog.get("current", 0),
+        "total": prog.get("total", 0),
+        "status": prog.get("status", ""),
+        "detail": prog.get("detail", ""),
+    }
     return resp
 
 
