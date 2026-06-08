@@ -74,6 +74,10 @@ def _ensure_indexes(db):
     # Rule blacklist collection indexes
     db.rule_blacklist.create_index("condition_normalized")
 
+    # Stock indicators collection indexes
+    db.stock_indicators.create_index([("code", ASCENDING), ("date", DESCENDING)])
+    db.stock_indicators.create_index([("date", DESCENDING)])
+
 
 def query_sort_end(collection, sort_end = ''):
     """查询数据库中最新的新闻的realSort作为sortEnd"""
