@@ -135,7 +135,7 @@ class StockRuleEngine:
 def calc_sma(data, n):
     """简单移动平均"""
     if len(data) < n:
-        logger.warning("calc_sma: need %d values, got %d, fallback to last value", n, len(data))
+        logger.debug("calc_sma: need %d values, got %d, fallback to last value", n, len(data))
         return data[-1]
     return sum(data[-n:]) / n
 

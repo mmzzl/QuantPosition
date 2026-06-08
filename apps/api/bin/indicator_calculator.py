@@ -10,16 +10,18 @@ import os
 import logging
 from datetime import datetime, timedelta
 
+import pandas as pd
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import get_db
-from bin.rule_engine import calc_sma, calc_rsi, calc_atr, calc_adx
+from bin.rule_engine import calc_rsi, calc_atr, calc_adx
 from pymongo import UpdateOne
 
 logger = logging.getLogger(__name__)
 
 
 def compute_stock_indicators(klines):
-    """从 K 线列表计算所有技术指标
+    """从 K 线列表计算所有技术指标 (pandas 向量化加速)
 
     Args:
         klines: list of dicts with keys [code, date, open, high, low, close, volume]
@@ -32,43 +34,99 @@ def compute_stock_indicators(klines):
         logger.warning("compute_stock_indicators: 数据不足 %d 条", len(klines))
         return None
 
-    closes = [k["close"] for k in klines]
-    volumes = [k["volume"] for k in klines]
-    highs = [k["high"] for k in klines]
-    lows = [k["low"] for k in klines]
+    df = pd.DataFrame(klines)
+    df['date_str'] = df['date'].str[:10]
+    for col in ('open', 'high', 'low', 'close', 'volume'):
+        df[col] = df[col].astype(float)
 
+    # 向量化 SMA / rolling
+    df['ma5'] = df['close'].rolling(5, min_periods=1).mean()
+    df['ma10'] = df['close'].rolling(10, min_periods=1).mean()
+    df['ma20'] = df['close'].rolling(20, min_periods=1).mean()
+    df['ma60'] = df['close'].rolling(60, min_periods=1).mean()
+    df['ma5_vol'] = df['volume'].rolling(5, min_periods=1).mean()
+    df['high20'] = df['high'].rolling(20, min_periods=1).max()
+    df['low20'] = df['low'].rolling(20, min_periods=1).min()
+
+    df['last_close'] = df['close'].shift(1).fillna(df['close'])
+    df['amplitude'] = (df['high'] - df['low']) / df['last_close']
+    df.loc[df['last_close'] <= 0, 'amplitude'] = 0.0
+
+    # RSI / ATR / ADX 仍需要逐行计算（Wilder 递归）
+    closes_l = df['close'].tolist()
+    highs_l = df['high'].tolist()
+    lows_l = df['low'].tolist()
+    n = len(closes_l)
+
+    rsi_vals = []
+    atr_vals = []
+    adx_vals = []
+
+    # --- RSI: Wilder 迭代 ---
+    if n >= 15:
+        gains = []
+        losses = []
+        for i in range(1, 15):
+            d = closes_l[i] - closes_l[i - 1]
+            gains.append(d if d > 0 else 0)
+            losses.append(-d if d < 0 else 0)
+        avg_gain = sum(gains) / 14
+        avg_loss = sum(losses) / 14
+        rsi_vals[:15] = [50] * 15
+        rsi_vals[14] = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100
+        for i in range(15, n):
+            d = closes_l[i] - closes_l[i - 1]
+            g = d if d > 0 else 0
+            l = -d if d < 0 else 0
+            avg_gain = (avg_gain * 13 + g) / 14
+            avg_loss = (avg_loss * 13 + l) / 14
+            rsi_vals.append(100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 100)
+    else:
+        rsi_vals = [50] * n
+
+    # --- ATR: Wilder 迭代 ---
+    if n >= 2:
+        trs = []
+        atr_vals.append(0.0)
+        for i in range(1, n):
+            tr = max(highs_l[i] - lows_l[i],
+                     abs(highs_l[i] - closes_l[i - 1]),
+                     abs(lows_l[i] - closes_l[i - 1]))
+            trs.append(tr)
+            atr_vals.append(tr)
+        if n >= 15:
+            atr = sum(trs[:14]) / 14
+            atr_vals[14] = atr
+            for i in range(14, len(trs)):
+                atr = (atr * 13 + trs[i]) / 14
+                atr_vals[i + 1] = atr
+    else:
+        atr_vals = [0.0] * n
+
+    # --- ADX: 完整窗口一次性算（已有内置循环）---
+    adx_vals = [25.0] * n
+    if n >= 28:
+        full_adx = calc_adx(highs_l, lows_l, closes_l)
+        # 只在最后有足够数据的索引填入
+        for j in range(27, n):
+            tmp_h = highs_l[:j + 1]
+            tmp_l = lows_l[:j + 1]
+            tmp_c = closes_l[:j + 1]
+            adx_vals[j] = calc_adx(tmp_h, tmp_l, tmp_c)
+
+    # --- 组装结果 ---
     results = {}
-    for i in range(len(klines)):
-        date_str = klines[i]["date"][:10]
-        cur_close = closes[i]
-        prev_close = closes[i - 1] if i >= 1 else cur_close
-        open_val = klines[i].get("open", 0)
-
-        window_closes = closes[:i + 1]
-        window_volumes = volumes[:i + 1]
-        window_highs = highs[:i + 1]
-        window_lows = lows[:i + 1]
-
-        high20 = max(window_highs[-20:]) if len(window_highs) >= 20 else window_highs[-1]
-        low20 = min(window_lows[-20:]) if len(window_lows) >= 20 else window_lows[-1]
-        amplitude = (highs[i] - lows[i]) / prev_close if prev_close > 0 else 0
-
-        results[date_str] = {
-            "close": cur_close,
-            "volume": volumes[i],
-            "ma5": calc_sma(window_closes, 5),
-            "ma10": calc_sma(window_closes, 10),
-            "ma20": calc_sma(window_closes, 20),
-            "ma60": calc_sma(window_closes, 60),
-            "ma5_vol": calc_sma(window_volumes, 5),
-            "last_close": prev_close,
-            "high20": high20,
-            "low20": low20,
-            "open": open_val,
-            "rsi": calc_rsi(window_closes),
-            "atr": calc_atr(window_highs, window_lows, window_closes),
-            "adx": calc_adx(window_highs, window_lows, window_closes),
-            "amplitude": amplitude,
+    for idx, row in df.iterrows():
+        results[row['date_str']] = {
+            "close": row['close'], "volume": row['volume'],
+            "ma5": row['ma5'], "ma10": row['ma10'],
+            "ma20": row['ma20'], "ma60": row['ma60'],
+            "ma5_vol": row['ma5_vol'],
+            "last_close": row['last_close'],
+            "high20": row['high20'], "low20": row['low20'],
+            "open": row['open'],
+            "rsi": rsi_vals[idx], "atr": atr_vals[idx], "adx": adx_vals[idx],
+            "amplitude": row['amplitude'],
         }
 
     return results
