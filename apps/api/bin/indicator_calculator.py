@@ -8,13 +8,14 @@
 import sys
 import os
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import get_db
-from bin.rule_engine import calc_rsi, calc_atr, calc_adx
+from bin.rule_engine import calc_rsi, calc_atr
 from pymongo import UpdateOne
 
 logger = logging.getLogger(__name__)
@@ -103,16 +104,44 @@ def compute_stock_indicators(klines):
     else:
         atr_vals = [0.0] * n
 
-    # --- ADX: 完整窗口一次性算（已有内置循环）---
+    # --- ADX: 渐进式 O(n) 计算 ---
     adx_vals = [25.0] * n
     if n >= 28:
-        full_adx = calc_adx(highs_l, lows_l, closes_l)
-        # 只在最后有足够数据的索引填入
-        for j in range(27, n):
-            tmp_h = highs_l[:j + 1]
-            tmp_l = lows_l[:j + 1]
-            tmp_c = closes_l[:j + 1]
-            adx_vals[j] = calc_adx(tmp_h, tmp_l, tmp_c)
+        trs = [0.0] * (n - 1)
+        pdms = [0.0] * (n - 1)
+        mdms = [0.0] * (n - 1)
+        for i in range(1, n):
+            tr = max(highs_l[i] - lows_l[i],
+                     abs(highs_l[i] - closes_l[i - 1]),
+                     abs(lows_l[i] - closes_l[i - 1]))
+            trs[i - 1] = tr
+            up = highs_l[i] - highs_l[i - 1]
+            down = lows_l[i - 1] - lows_l[i]
+            pdms[i - 1] = up if up > down and up > 0 else 0
+            mdms[i - 1] = down if down > up and down > 0 else 0
+
+        s_tr = sum(trs[:14]) / 14
+        s_pdm = sum(pdms[:14]) / 14
+        s_mdm = sum(mdms[:14]) / 14
+
+        dxs = []
+        for i in range(14, n - 1):
+            s_tr = (s_tr * 13 + trs[i]) / 14
+            s_pdm = (s_pdm * 13 + pdms[i]) / 14
+            s_mdm = (s_mdm * 13 + mdms[i]) / 14
+            pdi = s_pdm / s_tr * 100 if s_tr > 0 else 0
+            mdi = s_mdm / s_tr * 100 if s_tr > 0 else 0
+            if pdi + mdi > 0:
+                dxs.append(abs(pdi - mdi) / (pdi + mdi) * 100)
+            else:
+                dxs.append(0)
+
+        if len(dxs) >= 14:
+            adx_val = sum(dxs[:14]) / 14
+            adx_vals[28] = adx_val
+            for j in range(14, len(dxs)):
+                adx_val = (adx_val * 13 + dxs[j]) / 14
+                adx_vals[j + 15] = adx_val
 
     # --- 组装结果 ---
     results = {}
@@ -164,42 +193,59 @@ def update_stock_indicators(db, codes, warmup_days=60, backfill=False):
 
     stock_klines = _batch_load_klines(db, codes, start_str, end_str)
 
-    updated = 0
-    errors = 0
-    for code in codes:
+    def _process(code):
         klines = stock_klines.get(code, [])
         if not klines:
-            continue
+            return False, False
         try:
             indicators = compute_stock_indicators(klines)
             if indicators is None:
-                continue
+                return False, False
             _upsert_indicators(db, code, indicators)
-            updated += 1
+            return True, False
         except Exception as e:
             logger.error("计算 %s 指标失败: %s", code, e)
-            errors += 1
+            return False, True
+
+    updated = 0
+    errors = 0
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(_process, code) for code in codes]
+        for f in as_completed(futures):
+            ok, err = f.result()
+            if ok:
+                updated += 1
+            elif err:
+                errors += 1
 
     return updated, errors
 
 
 def backfill_all_indicators(db, chunk_size=200):
     """回填所有股票的所有历史指标"""
+    import time
     all_codes = db.stock_kline.distinct("code", {"frequency": 9})
-    logger.info("回填指标: 共 %d 只股票", len(all_codes))
+    total = len(all_codes)
+    logger.info("回填指标: 共 %d 只股票", total)
 
     total_updated = 0
     total_errors = 0
-    for i in range(0, len(all_codes), chunk_size):
+    t_start = time.time()
+    for i in range(0, total, chunk_size):
         chunk = all_codes[i:i + chunk_size]
         updated, errors = update_stock_indicators(db, chunk, backfill=True)
         total_updated += updated
         total_errors += errors
-        logger.info("回填进度: %d/%d (更新 %d, 错误 %d)",
-                     min(i + chunk_size, len(all_codes)), len(all_codes),
-                     total_updated, total_errors)
+        elapsed = time.time() - t_start
+        done = min(i + chunk_size, total)
+        rate = done / elapsed if elapsed > 0 else 0
+        eta = (total - done) / rate if rate > 0 else 0
+        logger.info("回填 [%d/%d] 更新%d 错误%d | %.1f只/秒 预计剩余%.0f秒",
+                     done, total, total_updated, total_errors, rate, eta)
+        sys.stdout.flush()
 
-    logger.info("回填完成: 更新 %d 只, 错误 %d 只", total_updated, total_errors)
+    logger.info("回填完成: 更新 %d 只, 错误 %d 只, 耗时 %.0f 秒",
+                 total_updated, total_errors, time.time() - t_start)
     return total_updated, total_errors
 
 
