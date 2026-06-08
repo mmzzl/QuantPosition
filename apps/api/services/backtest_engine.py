@@ -114,6 +114,38 @@ def _load_aligned_klines(codes, start, end):
     return result
 
 
+def _load_aligned_indicators(codes, start, end):
+    """从 stock_indicators 加载预计算指标
+
+    Returns:
+        {code: {date_str: {ma5, ma10, ..., adx, amplitude}}}
+    """
+    db = get_db()
+    raw = list(db.stock_indicators.find(
+        {"code": {"$in": codes}, "date": {"$gte": start, "$lte": end}},
+    ).sort("date", 1))
+
+    result = {}
+    for doc in raw:
+        code = doc["code"]
+        date_str = doc["date"]
+        result.setdefault(code, {})[date_str] = {
+            "ma5": doc.get("ma5"),
+            "ma10": doc.get("ma10"),
+            "ma20": doc.get("ma20"),
+            "ma60": doc.get("ma60"),
+            "ma5_vol": doc.get("ma5_vol"),
+            "high20": doc.get("high20"),
+            "low20": doc.get("low20"),
+            "rsi": doc.get("rsi"),
+            "atr": doc.get("atr"),
+            "adx": doc.get("adx"),
+            "amplitude": doc.get("amplitude"),
+        }
+
+    return result
+
+
 class PortfolioRuleStrategy(bt.Strategy):
     """组合策略：单Cerebro + 共享资金池 + 每天全市场选股"""
 
@@ -121,7 +153,7 @@ class PortfolioRuleStrategy(bt.Strategy):
         stock_codes=None, name_map=None, custom_rules=None,
         max_hold_days=60, cooldown_days=3, stop_loss_pct=0.08,
         max_positions=5, start_date_str=None,
-        task_id=None, bars_total=0,
+        task_id=None, bars_total=0, precomputed_indicators=None,
     )
 
     def __init__(self):
@@ -138,21 +170,9 @@ class PortfolioRuleStrategy(bt.Strategy):
 
         self.engine = StockRuleEngine(self.rules) if self.rules else None
 
-        self.indicators = {}
-        for i, code in enumerate(self.codes):
-            d = self.datas[i]
-            self.indicators[code] = {
-                'sma5': bt.indicators.SMA(d.close, period=5),
-                'sma10': bt.indicators.SMA(d.close, period=10),
-                'sma20': bt.indicators.SMA(d.close, period=20),
-                'sma60': bt.indicators.SMA(d.close, period=60),
-                'sma_vol5': bt.indicators.SMA(d.volume, period=5),
-                'high20': bt.indicators.Highest(d.high, period=20),
-                'low20': bt.indicators.Lowest(d.low, period=20),
-                'rsi': bt.indicators.RSI_Safe(d.close, period=14),
-                'atr': bt.indicators.ATR(d, period=14),
-                'adx': bt.indicators.ADX(d, period=14),
-            }
+        self.precomputed = self.p.precomputed_indicators or {}
+        if not self.precomputed:
+            logging.warning("[BACKTEST] 无预计算指标数据，回测将使用默认值")
 
         raw = self.p.start_date_str
         self.start_date = pd.Timestamp(raw).date() if raw else None
@@ -169,20 +189,28 @@ class PortfolioRuleStrategy(bt.Strategy):
     def _ctx(self, code, has_pos, cost, buy_date, today):
         from bin.rule_engine import StockRuleEngine
         d = self.datas[self._code_index[code]]
-        ind = self.indicators[code]
+
+        date_str = d.datetime.date(0).isoformat()
+        stock_ind = self.precomputed.get(code, {}).get(date_str, {})
 
         last_close = d.close[-1] if len(d) > 1 else d.close[0]
-        amplitude = (d.high[0] - d.low[0]) / last_close if last_close > 0 else 0
+        amplitude = stock_ind.get("amplitude",
+                                  (d.high[0] - d.low[0]) / last_close if last_close > 0 else 0)
 
         return StockRuleEngine.build_context({
             "close": d.close[0], "volume": d.volume[0],
-            "ma5": ind['sma5'][0], "ma10": ind['sma10'][0],
-            "ma20": ind['sma20'][0], "ma60": ind['sma60'][0],
-            "ma5_vol": ind['sma_vol5'][0],
+            "ma5": stock_ind.get("ma5", d.close[0]),
+            "ma10": stock_ind.get("ma10", d.close[0]),
+            "ma20": stock_ind.get("ma20", d.close[0]),
+            "ma60": stock_ind.get("ma60", d.close[0]),
+            "ma5_vol": stock_ind.get("ma5_vol", d.volume[0]),
             "last_close": last_close,
-            "high": ind['high20'][0], "low": ind['low20'][0],
+            "high": stock_ind.get("high20", d.high[0]),
+            "low": stock_ind.get("low20", d.low[0]),
             "open": d.open[0], "name": self.name_map.get(code, ""),
-            "rsi": ind['rsi'][0], "atr": ind['atr'][0], "adx": ind['adx'][0],
+            "rsi": stock_ind.get("rsi", 50),
+            "atr": stock_ind.get("atr", 0),
+            "adx": stock_ind.get("adx", 25),
             "amplitude": amplitude,
         }, {"has_pos": has_pos, "cost": cost, "buy_date": buy_date, "today": today})
 
@@ -357,6 +385,11 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
 
     stock_dfs = _load_aligned_klines(filtered, load_start, end_date)
 
+    indicators = _load_aligned_indicators(filtered, load_start, end_date)
+    if task_id:
+        total_ind = sum(len(v) for v in indicators.values())
+        logging.info(f"[BACKTEST] 预计算指标已加载: {len(indicators)} 只股票, {total_ind} 条记录")
+
     if task_id:
         loaded = sum(len(df) for df in stock_dfs.values())
         _update_progress(task_id, 0, len(stock_dfs), "K线加载完成", f"{len(stock_dfs)} 只股票, {loaded} 条K线")
@@ -401,7 +434,8 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
                         max_positions=max_positions,
                         start_date_str=start_date,
                         task_id=task_id,
-                        bars_total=bars_total)
+                        bars_total=bars_total,
+                        precomputed_indicators=indicators)
 
     for code in codes_with_data:
         cerebro.adddata(bt.feeds.PandasData(dataname=stock_dfs[code]))
