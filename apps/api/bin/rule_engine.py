@@ -141,14 +141,23 @@ def calc_sma(data, n):
 
 
 def calc_rsi(prices, period=14):
-    """RSI 相对强弱指标"""
+    """RSI 相对强弱指标 (Wilder 平滑，与 backtrader 一致)"""
     if len(prices) < period + 1:
         return 50
-    deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
-    gains = [d if d > 0 else 0 for d in deltas[-period:]]
-    losses = [-d if d < 0 else 0 for d in deltas[-period:]]
+    gains = []
+    losses = []
+    for i in range(1, period + 1):
+        diff = prices[i] - prices[i - 1]
+        gains.append(diff if diff > 0 else 0)
+        losses.append(-diff if diff < 0 else 0)
     avg_gain = sum(gains) / period
     avg_loss = sum(losses) / period
+    for i in range(period + 1, len(prices)):
+        diff = prices[i] - prices[i - 1]
+        gain = diff if diff > 0 else 0
+        loss = -diff if diff < 0 else 0
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
     if avg_loss == 0:
         return 100
     rs = avg_gain / avg_loss
@@ -156,16 +165,21 @@ def calc_rsi(prices, period=14):
 
 
 def calc_atr(highs, lows, closes, period=14):
-    """ATR 真实波动幅度"""
-    if len(closes) < period + 1:
+    """ATR 真实波动幅度 (Wilder 平滑，与 backtrader 一致)"""
+    if len(closes) < 2:
         return (highs[-1] - lows[-1]) if (highs[-1] - lows[-1]) > 0 else 0
     trs = []
     for i in range(1, len(highs)):
         tr = max(highs[i] - lows[i],
-                 abs(highs[i] - closes[i-1]),
-                 abs(lows[i] - closes[i-1]))
+                 abs(highs[i] - closes[i - 1]),
+                 abs(lows[i] - closes[i - 1]))
         trs.append(tr)
-    return sum(trs[-period:]) / period
+    if len(trs) < period:
+        return trs[-1] if trs else 0
+    atr = sum(trs[:period]) / period
+    for i in range(period, len(trs)):
+        atr = (atr * (period - 1) + trs[i]) / period
+    return atr
 
 
 def calc_adx(highs, lows, closes, period=14):
