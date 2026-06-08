@@ -454,16 +454,19 @@ class PortfolioRuleStrategy(bt.Strategy):
             logging.error(f"[NEXT] {dt} error: {e}\n{traceback.format_exc()}")
 
 
-def _update_progress(task_id, current, total, status, detail=""):
+def _update_progress(task_id, current, total, status, detail="", result=None):
     try:
+        doc = {"current": current, "total": total, "status": status, "detail": detail, "updated_at": datetime.now()}
+        if result is not None:
+            doc["result"] = result
         db = get_db()
         db.backtest_progress.update_one(
             {"_id": task_id},
-            {"$set": {"current": current, "total": total, "status": status, "detail": detail, "updated_at": datetime.now()}},
+            {"$set": doc},
             upsert=True,
         )
     except Exception as e:
-        logging.warning(f"进度更新失败: {e}")
+        logging.error(f"进度更新失败: {e}")
 
 
 def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=None, end_date=None,
@@ -581,7 +584,8 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
         logging.error(f"[BACKTEST] 回测执行失败: {e}")
         if task_id:
             _update_progress(task_id, 0, 0, "回测失败", str(e))
-        return {"strategy": strategy_name, "trades": 0, "processed": 0, "skipped": len(filtered), "error": str(e)}
+        return {"strategy": strategy_name, "trades": 0, "processed": 0,
+                "skipped": len(filtered), "error": str(e)}
     logging.disable(logging.NOTSET)
 
     all_trades = strat.trade_log
@@ -592,13 +596,15 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
     logging.info(f"[BACKTEST] 组合: {start_value} -> {end_value:.0f} ({portfolio_return}%) trades={len(all_trades)}")
 
     if not all_trades:
-        if task_id:
-            _update_progress(task_id, bars_total, bars_total, "回测完成（无交易）", "没有触发买入信号")
-        return {
+        result = {
             "strategy": strategy_name, "trades": 0,
             "processed": len(codes_with_data), "skipped": len(filtered) - len(codes_with_data),
             "portfolio_return": portfolio_return,
         }
+        if task_id:
+            _update_progress(task_id, bars_total, bars_total, "回测完成（无交易）",
+                             "没有触发买入信号", result=result)
+        return result
 
     pnls = [t["pnl_pct"] for t in all_trades]
     wins = [p for p in pnls if p > 0]
@@ -637,6 +643,7 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
         logging.info(f"[TRADE] {t['code']} {t.get('name','')} buy={t['entry_date']}@{t['entry_price']} sell={t['exit_date']}@{t['exit_price']} pnl={t['pnl_pct']}% hold={t['hold_days']}d reason={t['reason']}")
 
     if task_id:
-        _update_progress(task_id, bars_total, bars_total, "回测完成", f"交易 {len(all_trades)} 笔")
+        _update_progress(task_id, bars_total, bars_total, "回测完成",
+                         f"交易 {len(all_trades)} 笔", result=result)
 
     return result

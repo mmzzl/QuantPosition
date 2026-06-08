@@ -45,7 +45,7 @@ def get_task_status(task_id: str, current_user: AuthenticatedUser = Depends(get_
     db = get_db()
     resp = {"task_id": task_id}
 
-    # MongoDB 进度是真实状态，优先于 Celery
+    # 读进度——这被 run_backtest 中的 _update_progress 持续写入
     prog = db.backtest_progress.find_one({"_id": task_id})
     if not prog:
         resp["status"] = "PENDING"
@@ -55,33 +55,42 @@ def get_task_status(task_id: str, current_user: AuthenticatedUser = Depends(get_
     prog_status = prog.get("status", "")
     submitted_at = prog.get("submitted_at")
 
+    # --- 终态判定：失败 ---
     if prog_status in ("回测失败", "error"):
         resp["status"] = "FAILURE"
         resp["error"] = prog.get("detail", "回测执行失败")
         return resp
 
-    if prog_status == "回测完成":
-        # 任务已完成，从 Celery 取结果（如果有）或从 latest 快照取
-        from celery.result import AsyncResult
-        r = AsyncResult(task_id)
-        if r.status == "SUCCESS":
+    # --- 终态判定：成功（兼容「回测完成」和「回测完成（无交易）」） ---
+    if prog_status.startswith("回测完成"):
+        # 结果优先从 progress 里的内嵌 result 读，兼容无 result backend
+        inline_result = prog.get("result")
+        if inline_result:
             resp["status"] = "SUCCESS"
-            resp["result"] = r.result
+            resp["result"] = inline_result
         else:
-            # 无 result backend 时从 latest 快照读取
-            latest = db.backtest_results.find_one({"_id": "latest"})
-            if latest:
-                latest.pop("_id", None)
-                latest.pop("saved_at", None)
+            from celery.result import AsyncResult
+            r = AsyncResult(task_id)
+            if r.status == "SUCCESS":
                 resp["status"] = "SUCCESS"
-                resp["result"] = latest
+                resp["result"] = r.result
             else:
-                resp["status"] = "SUCCESS"
-                resp["result"] = {"trades": 0, "portfolio_return": 0, "processed": prog.get("total", 0), "skipped": 0}
+                latest = db.backtest_results.find_one({"_id": "latest"})
+                if latest:
+                    latest.pop("_id", None)
+                    latest.pop("saved_at", None)
+                    resp["status"] = "SUCCESS"
+                    resp["result"] = latest
+                else:
+                    resp["status"] = "SUCCESS"
+                    resp["result"] = {
+                        "trades": 0, "portfolio_return": 0,
+                        "processed": prog.get("total", 0), "skipped": 0,
+                    }
         return resp
 
-    # 任务还在运行
-    if submitted_at and not prog_status.startswith(("回测", "error")):
+    # --- 任务还在运行：检测 Celery 是否已死 ---
+    if submitted_at and prog_status in ("submitted", "初始化...", "等待中...", ""):
         from celery.result import AsyncResult
         r = AsyncResult(task_id)
         if r.status == "PENDING":
