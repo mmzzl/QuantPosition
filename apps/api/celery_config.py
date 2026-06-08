@@ -31,6 +31,7 @@ celery_app.conf.update(
 _TASK_MODULES = [
     "selection_tasks", "news_selection_tasks", "kline_tasks",
     "backtest_tasks", "rule_explore_tasks", "heatmap_selection_tasks",
+    "indicator_tasks",
 ]
 for _mod in _TASK_MODULES:
     try:
