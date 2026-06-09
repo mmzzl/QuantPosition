@@ -7,7 +7,7 @@
 
     <el-card style="margin-bottom:16px">
       <el-row :gutter="16">
-        <el-col :span="5">
+        <el-col :span="4">
           <div class="label">回测天数</div>
             <el-select v-model="daysBack" style="width:100%">
             <el-option label="180 天" :value="180" />
@@ -15,30 +15,38 @@
             <el-option label="730 天" :value="730" />
           </el-select>
         </el-col>
-        <el-col :span="4">
+        <el-col :span="3">
           <div class="label">初始资金</div>
           <el-input-number v-model="cash" :min="10000" :step="10000" style="width:100%" />
         </el-col>
-        <el-col :span="4">
+        <el-col :span="3">
           <div class="label">手续费率</div>
           <el-input-number v-model="commission" :min="0" :max="0.05" :step="0.0005" :precision="4" style="width:100%" />
         </el-col>
-        <el-col :span="4">
+        <el-col :span="3">
           <div class="label">最大持仓</div>
           <el-input-number v-model="maxPositions" :min="1" :max="20" style="width:100%" />
         </el-col>
-        <el-col :span="4">
+        <el-col :span="3">
           <div class="label">候选股票数</div>
           <el-select v-model="maxStocks" style="width:100%">
-            <el-option label="100 只（快速）" :value="100" />
+            <el-option label="100 只" :value="100" />
             <el-option label="300 只" :value="300" />
-            <el-option label="500 只（推荐）" :value="500" />
+            <el-option label="500 只" :value="500" />
             <el-option label="全市场" :value="0" />
           </el-select>
         </el-col>
         <el-col :span="3">
+          <div class="label">持仓天数上限</div>
+          <el-input-number v-model="maxHoldDays" :min="10" :max="999" :step="10" style="width:100%" />
+        </el-col>
+        <el-col :span="3">
+          <div class="label">冷却天数</div>
+          <el-input-number v-model="cooldownDays" :min="1" :max="30" style="width:100%" />
+        </el-col>
+        <el-col :span="2">
           <div class="label">&nbsp;</div>
-          <el-button @click="run" type="primary" :loading="running" style="width:100%">运行回测</el-button>
+          <el-button @click="run" type="primary" :loading="running" style="width:100%">运行</el-button>
         </el-col>
       </el-row>
     </el-card>
@@ -144,6 +152,7 @@ export default {
   data() {
     return {
       daysBack: 360, cash: 100000, commission: 0.001, maxStocks: 500, maxPositions: 5,
+      maxHoldDays: 60, cooldownDays: 1,
       running: false, progress: null, result: null, pollTimer: null,
       page: 1, pageSize: 20,
       filterCode: '', filterName: '', filterReason: '', filterRank: '',
@@ -203,7 +212,7 @@ export default {
       this.result = null
       this.progress = { pct: 0, text: '提交任务...', status: '' }
       try {
-        const { data } = await submitBacktest({ days_back: this.daysBack, initial_cash: this.cash, commission: this.commission, max_stocks: this.maxStocks, max_positions: this.maxPositions })
+        const { data } = await submitBacktest({ days_back: this.daysBack, initial_cash: this.cash, commission: this.commission, max_stocks: this.maxStocks, max_positions: this.maxPositions, max_hold_days: this.maxHoldDays, cooldown_days: this.cooldownDays })
         this.poll(data.task_id)
       } catch (e) {
         this.$message.error(e.response?.data?.detail || e.message)

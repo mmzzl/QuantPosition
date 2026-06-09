@@ -27,6 +27,8 @@ def run_simple_backtest(
     commission: float = 0.001,
     max_stocks: int = 500,
     max_positions: int = 5,
+    max_hold_days: int = 60,
+    cooldown_days: int = 1,
 ) -> Dict[str, Any]:
 
     db = get_db()
@@ -48,6 +50,8 @@ def run_simple_backtest(
         commission=commission,
         max_stocks=max_stocks,
         max_positions=max_positions,
+        max_hold_days=max_hold_days,
+        cooldown_days=cooldown_days,
         celery_task=self,
         task_id=task_id,
     )

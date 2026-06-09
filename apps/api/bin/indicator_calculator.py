@@ -148,12 +148,12 @@ def compute_stock_indicators(klines):
     for idx, row in df.iterrows():
         results[row['date_str']] = {
             "close": row['close'], "volume": row['volume'],
+            "open": row['open'], "high": row['high'], "low": row['low'],
             "ma5": row['ma5'], "ma10": row['ma10'],
             "ma20": row['ma20'], "ma60": row['ma60'],
             "ma5_vol": row['ma5_vol'],
             "last_close": row['last_close'],
             "high20": row['high20'], "low20": row['low20'],
-            "open": row['open'],
             "rsi": rsi_vals[idx], "atr": atr_vals[idx], "adx": adx_vals[idx],
             "amplitude": row['amplitude'],
         }

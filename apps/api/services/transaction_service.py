@@ -40,7 +40,8 @@ class TransactionService:
         }
 
     @staticmethod
-    def get_transactions(user_id: str, page: int = 1, page_size: int = 20) -> Dict:
+    def get_transactions(user_id: str, page: int = 1, page_size: int = 20,
+                         sort_by: str = "created_at", sort_order: str = "desc") -> Dict:
         """获取交易记录列表"""
         db = get_db()
         transactions_collection = db.transactions
@@ -48,13 +49,27 @@ class TransactionService:
         skip = (page - 1) * page_size
         total = transactions_collection.count_documents({"user_id": user_id})
 
-        transactions = list(transactions_collection.find(
-            {"user_id": user_id}
-        ).sort("created_at", -1).skip(skip).limit(page_size))
+        sort_dir = -1 if sort_order == "desc" else 1
+
+        if sort_by == "realized_pnl":
+            pipeline = [
+                {"$match": {"user_id": user_id}},
+                {"$addFields": {
+                    "sort_order_pnl": {"$cond": [{"$ifNull": ["$realized_pnl", False]}, 0, 1]}
+                }},
+                {"$sort": {"sort_order_pnl": 1, "realized_pnl": sort_dir}},
+                {"$skip": skip},
+                {"$limit": page_size}
+            ]
+            transactions = list(transactions_collection.aggregate(pipeline))
+        else:
+            transactions = list(transactions_collection.find(
+                {"user_id": user_id}
+            ).sort(sort_by, sort_dir).skip(skip).limit(page_size))
 
         items = []
         for t in transactions:
-            items.append({
+            item = {
                 "id": str(t["_id"]),
                 "user_id": t["user_id"],
                 "code": t["code"],
@@ -62,8 +77,10 @@ class TransactionService:
                 "quantity": t["quantity"],
                 "price": t["price"],
                 "total": t["total"],
-                "created_at": t["created_at"]
-            })
+                "created_at": t["created_at"],
+                "realized_pnl": t.get("realized_pnl")
+            }
+            items.append(item)
 
         return {
             "total": total,
@@ -73,9 +90,10 @@ class TransactionService:
         }
 
     @staticmethod
-    def get_history(user_id: str, page: int = 1, page_size: int = 20) -> Dict:
+    def get_history(user_id: str, page: int = 1, page_size: int = 20,
+                    sort_by: str = "created_at", sort_order: str = "desc") -> Dict:
         """获取持仓历史（与 get_transactions 相同）"""
-        return TransactionService.get_transactions(user_id, page, page_size)
+        return TransactionService.get_transactions(user_id, page, page_size, sort_by, sort_order)
 
     @staticmethod
     def delete_transaction(user_id: str, transaction_id: str) -> bool:

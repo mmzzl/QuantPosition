@@ -136,6 +136,8 @@ async def get_holding_history(
     user_id: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    sort_by: str = Query("created_at", regex="^(created_at|realized_pnl)$"),
+    sort_order: str = Query("desc", regex="^(asc|desc)$"),
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
     """获取持仓历史"""
@@ -145,7 +147,7 @@ async def get_holding_history(
             detail="无权限访问"
         )
 
-    return TransactionService.get_history(user_id, page, page_size)
+    return TransactionService.get_history(user_id, page, page_size, sort_by, sort_order)
 
 
 @router.get("/{user_id}/{code}/exit-rule")
@@ -202,6 +204,8 @@ async def get_transactions(
     user_id: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    sort_by: str = Query("created_at", regex="^(created_at|realized_pnl)$"),
+    sort_order: str = Query("desc", regex="^(asc|desc)$"),
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
     """获取交易记录"""
@@ -211,7 +215,7 @@ async def get_transactions(
             detail="无权限访问"
         )
 
-    return TransactionService.get_transactions(user_id, page, page_size)
+    return TransactionService.get_transactions(user_id, page, page_size, sort_by, sort_order)
 
 
 @router.delete("/transactions/{user_id}/{transaction_id}")

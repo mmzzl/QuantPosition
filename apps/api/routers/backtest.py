@@ -15,6 +15,8 @@ def submit_backtest(
     commission: float = Query(0.001, ge=0, le=0.05),
     max_stocks: int = Query(500, ge=0, le=5000),
     max_positions: int = Query(5, ge=1, le=20),
+    max_hold_days: int = Query(60, ge=10, le=999),
+    cooldown_days: int = Query(1, ge=1, le=30),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     try:
@@ -24,6 +26,8 @@ def submit_backtest(
             commission=commission,
             max_stocks=max_stocks,
             max_positions=max_positions,
+            max_hold_days=max_hold_days,
+            cooldown_days=cooldown_days,
         )
         # 预先写入进度记录，用于检测 Celery 是否存活
         db = get_db()
