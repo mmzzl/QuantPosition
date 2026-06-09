@@ -502,7 +502,9 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
         "profit_factor": round(abs(sum(wins) / sum(losses)), 2) if losses and sum(losses) != 0 else float('inf'),
         "sharpe": sharpe,
         "exit_stats": exit_stats,
-        "examples": all_trades[:10],
+        "trades_list": all_trades,
+        "examples_best": sorted(all_trades, key=lambda t: t["pnl_pct"], reverse=True)[:10],
+        "examples_worst": sorted(all_trades, key=lambda t: t["pnl_pct"])[:10],
     }
 
     logging.info(f"[RESULT] 组合收益={portfolio_return}% trades={len(all_trades)} win_rate={result['win_rate']}% sharpe={sharpe}")

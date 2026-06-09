@@ -82,14 +82,39 @@
       </el-card>
 
       <el-card style="margin-top:16px">
-        <template #header>交易记录 (前10笔)</template>
-        <el-table :data="result.examples" size="small" stripe>
+        <template #header>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span>交易记录</span>
+            <div style="display:flex;gap:8px">
+              <el-radio-group v-model="filterRank" size="small">
+                <el-radio-button value="">全部</el-radio-button>
+                <el-radio-button value="best">最好</el-radio-button>
+                <el-radio-button value="worst">最差</el-radio-button>
+              </el-radio-group>
+              <el-input v-model="filterCode" placeholder="代码" clearable style="width:120px" size="small" />
+              <el-input v-model="filterName" placeholder="名称" clearable style="width:120px" size="small" />
+              <el-select v-model="filterReason" placeholder="出场方式" clearable size="small" style="width:120px">
+                <el-option label="风控" value="risk" />
+                <el-option label="规则卖出" value="sell" />
+                <el-option label="止损" value="stop_loss" />
+                <el-option label="超时" value="timeout" />
+              </el-select>
+            </div>
+          </div>
+        </template>
+        <el-table :data="pagedTrades" size="small" stripe @sort-change="handleSortChange">
           <el-table-column prop="code" label="代码" width="80" />
           <el-table-column prop="name" label="名称" width="100" />
-          <el-table-column prop="entry_date" label="买入" width="100" />
-          <el-table-column prop="exit_date" label="卖出" width="100" />
+          <el-table-column prop="entry_date" label="买入日" width="105" />
+          <el-table-column prop="entry_price" label="买入价" width="80">
+            <template v-slot="{ row }">{{ row.entry_price?.toFixed(2) }}</template>
+          </el-table-column>
+          <el-table-column prop="exit_date" label="卖出日" width="105" />
+          <el-table-column prop="exit_price" label="卖出价" width="80">
+            <template v-slot="{ row }">{{ row.exit_price?.toFixed(2) }}</template>
+          </el-table-column>
           <el-table-column prop="hold_days" label="天数" width="60" />
-          <el-table-column prop="pnl_pct" label="收益" width="80">
+          <el-table-column prop="pnl_pct" label="收益" width="80" sortable="custom">
             <template v-slot="{ row }"><span :class="row.pnl_pct>=0?'profit':'loss'">{{ row.pnl_pct }}%</span></template>
           </el-table-column>
           <el-table-column prop="reason" label="出场" width="80">
@@ -99,6 +124,14 @@
             <template v-slot="{ row }"><el-tag v-for="r in (row.triggered_rules||[])" :key="r" size="small" style="margin-right:4px">{{ r }}</el-tag></template>
           </el-table-column>
         </el-table>
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :total="filteredTrades.length"
+          :page-sizes="[20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          style="margin-top:16px;justify-content:center"
+        />
       </el-card>
     </template>
   </div>
@@ -108,18 +141,63 @@
 import { submitBacktest, getTaskStatus, getLatestBacktest } from '@/api/backtest'
 
 export default {
-  data() { return { daysBack: 360, cash: 100000, commission: 0.001, maxStocks: 500, maxPositions: 5, running: false, progress: null, result: null, pollTimer: null } },
+  data() {
+    return {
+      daysBack: 360, cash: 100000, commission: 0.001, maxStocks: 500, maxPositions: 5,
+      running: false, progress: null, result: null, pollTimer: null,
+      page: 1, pageSize: 20,
+      filterCode: '', filterName: '', filterReason: '', filterRank: '',
+      sortKey: 'pnl_pct', sortOrder: 'descending',
+    }
+  },
   async mounted() {
     try {
       const { data } = await getLatestBacktest()
       if (data && data.exists !== false && data.trades) this.result = data
     } catch (e) {}
   },
+  computed: {
+    allTrades() {
+      if (this.filterRank === 'best') return this.result?.examples_best || []
+      if (this.filterRank === 'worst') return this.result?.examples_worst || []
+      return this.result?.trades_list || this.result?.examples || []
+    },
+    filteredTrades() {
+      let list = [...this.allTrades]
+      if (this.filterCode) list = list.filter(t => t.code.includes(this.filterCode))
+      if (this.filterName) list = list.filter(t => (t.name || '').includes(this.filterName))
+      if (this.filterReason) list = list.filter(t => t.reason === this.filterReason)
+      if (this.sortKey) {
+        list.sort((a, b) => {
+          const va = a[this.sortKey] ?? 0
+          const vb = b[this.sortKey] ?? 0
+          return this.sortOrder === 'ascending' ? va - vb : vb - va
+        })
+      }
+      return list
+    },
+    pagedTrades() {
+      const start = (this.page - 1) * this.pageSize
+      return this.filteredTrades.slice(start, start + this.pageSize)
+    },
+  },
   beforeUnmount() { if (this.pollTimer) clearInterval(this.pollTimer) },
+  watch: {
+    filterCode() { this.page = 1 },
+    filterName() { this.page = 1 },
+    filterReason() { this.page = 1 },
+    filterRank() { this.page = 1 },
+  },
   methods: {
     cls(v) { return v >= 0 ? 'profit' : 'loss' },
     exitLabel(k) { return { risk: '风控', sell: '规则卖出', stop_loss: '止损', timeout: '超时' }[k] || k },
     reasonType(k) { return { risk: 'danger', stop_loss: 'danger', sell: 'warning', timeout: 'info' }[k] || '' },
+    handleSortChange({ prop, order }) {
+      if (prop) {
+        this.sortKey = prop
+        this.sortOrder = order || 'descending'
+      }
+    },
     async run() {
       this.running = true
       this.result = null
