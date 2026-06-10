@@ -3,7 +3,6 @@ import logging
 import random
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
-from collections import defaultdict
 from database import get_db
 
 

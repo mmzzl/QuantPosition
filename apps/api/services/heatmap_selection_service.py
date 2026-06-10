@@ -36,32 +36,43 @@ class HeatmapSelectionService:
                 cutoff = now - timedelta(days=1)
             dt_filter = {"created_at": {"$gte": cutoff}}
 
-        all_stocks = list(cache.find(dt_filter))
+        # 用 MongoDB aggregation 计算每板块平均涨跌幅，只取 top-N
+        pipeline = [
+            {"$match": dt_filter},
+            {"$group": {
+                "_id": "$sector_name",
+                "avg_change_pct": {"$avg": "$change_pct"},
+                "stock_count": {"$sum": 1}
+            }},
+            {"$sort": {"avg_change_pct": -1}},
+            {"$limit": top_n}
+        ]
+        sector_aggregates = list(cache.aggregate(pipeline))
+        sectors = [{
+            "sector_name": s["_id"],
+            "avg_change_pct": round(s["avg_change_pct"], 2),
+            "stock_count": s["stock_count"]
+        } for s in sector_aggregates]
 
-        sector_groups = {}
-        for s in all_stocks:
-            sn = s.get("sector_name", "")
-            if sn not in sector_groups:
-                sector_groups[sn] = {"changes": [], "stock_count": 0}
-            sector_groups[sn]["changes"].append(s.get("change_pct", 0))
-            sector_groups[sn]["stock_count"] += 1
+        top_sector_names = {s["sector_name"] for s in sectors}
 
-        sectors = []
-        for sn, data in sector_groups.items():
-            avg_c = sum(data["changes"]) / len(data["changes"]) if data["changes"] else 0
-            sectors.append({
-                "sector_name": sn,
-                "avg_change_pct": round(avg_c, 2),
-                "stock_count": data["stock_count"]
-            })
-        sectors.sort(key=lambda x: x["avg_change_pct"], reverse=True)
-        top_sector_names = {s["sector_name"] for s in sectors[:top_n]}
+        if not top_sector_names:
+            return {
+                "sectors": [],
+                "stocks": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "strategy": "heatmap_selection",
+                "filter_summary": {"total_raw": 0, "total_filtered": 0}
+            }
+
+        stock_query = {"sector_name": {"$in": list(top_sector_names)}}
+        all_stocks = list(cache.find(stock_query))
 
         stock_list = []
         for s in all_stocks:
             sn = s.get("sector_name", "")
-            if sn not in top_sector_names:
-                continue
 
             score = 0
             flags = []

@@ -1,5 +1,6 @@
 # Apply pandas compatibility patch before any other imports
 # -*- coding: utf-8 -*-
+import os
 import logging
 from datetime import datetime
 from fastapi import FastAPI
@@ -116,7 +117,7 @@ def init_default_admin():
     roles_collection = db.roles
     
     admin_username = "admin"
-    admin_password = "admin123"
+    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
     
     existing_admin = users_collection.find_one({"username": admin_username})
     if not existing_admin:

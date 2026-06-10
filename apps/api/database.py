@@ -50,6 +50,7 @@ def _ensure_indexes(db):
     # BK stocks collection indexes
     db.bk_stocks.create_index([("bk_code", ASCENDING)])
     db.bk_stocks.create_index([("stock_code", ASCENDING)])
+    db.bk_stocks.create_index([("bk_name", ASCENDING)])
     db.bk_stocks.create_index([("bk_code", ASCENDING), ("stock_code", ASCENDING)], unique=True)
 
     # News selection cache indexes

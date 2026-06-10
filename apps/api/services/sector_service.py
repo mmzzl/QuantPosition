@@ -178,17 +178,17 @@ class SectorService:
             last_kline = prices.get("last", {})
 
             current_price = last_kline.get("close", 0)
-            open_price = first_kline.get("open", 0)
+            first_price = first_kline.get("close", 0)
             change_pct = 0
-            if open_price > 0 and current_price > 0:
-                change_pct = ((current_price - open_price) / open_price) * 100
+            if first_price > 0 and current_price > 0:
+                change_pct = ((current_price - first_price) / first_price) * 100
 
             stock_list.append({
                 "code": code,
                 "name": stock.get("stock_name", ""),
                 "change_pct": round(change_pct, 2),
                 "current_price": current_price,
-                "open_price": open_price,
+                "first_price": first_price,
                 "high": last_kline.get("high", 0),
                 "low": last_kline.get("low", 0),
                 "volume": last_kline.get("volume", 0),
