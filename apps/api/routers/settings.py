@@ -88,6 +88,7 @@ async def update_settings(
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
     """更新系统设置（管理员）"""
+    db = get_db()
     from services.role_service import RoleService
     roles = RoleService.get_user_roles(current_user.user_id)
     if not any(r.get("preset_key") in ("super_admin", "admin", "system_admin") for r in roles):

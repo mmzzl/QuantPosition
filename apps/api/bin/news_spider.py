@@ -171,7 +171,7 @@ class NewsSpider(object):
         """加载爬取进度"""
         base_path = os.path.dirname(os.path.abspath(__file__))
         progress_path = os.path.join(base_path, settings.spider_progress_file)
-        if os.path.exists(progress_path):
+        if os.path.exists(progress_path) and os.path.getsize(progress_path) > 0:
             with open(progress_path, 'r', encoding='utf-8') as f:
                 progress_data = json.load(f)
                 return progress_data
