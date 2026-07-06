@@ -22,7 +22,7 @@ def _tencent_5m_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict
     market = "bj" if code.startswith("8") else ("sh" if code.startswith(("6", "5")) else "sz")
     try:
         r = requests.get(
-            "https://web.ifzq.gtimg.cn/appstock/app/kline/mkline",
+            "https://ifzq.gtimg.cn/appstock/app/kline/mkline",
             params={"param": f"{market}{code},m5,,{count}"},
             timeout=10,
         )
@@ -48,10 +48,15 @@ def _tencent_5m_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict
     for bar in bars:
         if not isinstance(bar, (list, tuple)) or len(bar) < 6:
             continue
-        time_str = str(bar[0]).strip()
-        if not time_str:
+        raw_time = str(bar[0]).strip()
+        if not raw_time:
             continue
-        if not time_str.startswith(today_str):
+        try:
+            dt = datetime.strptime(raw_time, "%Y%m%d%H%M")
+            date_fmt = dt.strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
+        if date_fmt[:10] != today_str:
             continue
         try:
             o, c, h, l = float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4])
@@ -61,7 +66,7 @@ def _tencent_5m_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict
             continue
         records.append({
             "code": code,
-            "date": time_str,
+            "date": date_fmt,
             "open": o,
             "close": c,
             "high": h,

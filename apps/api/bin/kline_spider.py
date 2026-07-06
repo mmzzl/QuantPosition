@@ -29,7 +29,7 @@ def _tencent_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict]]:
     market = "bj" if code.startswith("8") else ("sh" if code.startswith(("6", "5")) else "sz")
     try:
         r = requests.get(
-            "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+            "https://ifzq.gtimg.cn/appstock/app/fqkline/get",
             params={"param": f"{market}{code},day,,,{count},qfq"},
             timeout=10,
         )
