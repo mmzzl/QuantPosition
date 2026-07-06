@@ -1,7 +1,6 @@
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import time
 import logging
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,9 +26,13 @@ def _tencent_5m_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict
             params={"param": f"{market}{code},m5,,{count}"},
             timeout=10,
         )
+        r.raise_for_status()
         d = r.json()
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         logging.error(f"tencent HTTP error for {code}: {e}")
+        return None
+    except ValueError as e:
+        logging.error(f"tencent JSON decode error for {code}: {e}, body={r.text[:200]}")
         return None
 
     if not d.get("data"):
