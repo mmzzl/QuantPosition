@@ -64,7 +64,8 @@ def build_dingtalk_message(results):
     if not lines:
         return "收盘分时复盘", "今日无持仓和推荐股票需要分析"
 
-    title = f"收盘分时复盘 ({len(results)} 只)"
+    displayed = sum(1 for r in results if r["conclusion"] != "跳过")
+    title = f"收盘分时复盘 ({displayed} 只)"
     content = "\n".join(lines)
     return title, content
 

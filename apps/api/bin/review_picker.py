@@ -5,8 +5,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from datetime import date
-from typing import List, Dict, Any, Optional
-from database import get_db
+from typing import List, Dict, Any
 from systems.logs import Log
 from systems.single import ScriptSingle
 from systems.sys import home
@@ -129,8 +128,11 @@ def main():
             if (i + 1) % 500 == 0:
                 logging.info(f"Progress: {i+1}/{total}")
 
-    scored = [(calc_score(r), r) for r in results if calc_score(r) >= 0]
-    scored.sort(key=lambda x: x[0], reverse=True)
+    scored = sorted(
+        [(calc_score(r), r) for r in results],
+        key=lambda x: x[0], reverse=True
+    )
+    scored = [(s, r) for s, r in scored if s >= 0]
     logging.info(f"Scored {len(scored)} stocks, top 5: {[(r['code'], int(s)) for s, r in scored[:5]]}")
 
     title, content = build_message(results)

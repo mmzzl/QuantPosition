@@ -81,7 +81,7 @@ def _tencent_5m_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict
 class MinuteKlineScraper:
     def __init__(self):
         self.collection = get_db()["stock_kline_5m"]
-        self.collection.create_index([("code", 1), ("date", 1)], background=True)
+        self.collection.create_index([("code", 1), ("date", 1)])
 
     def _get_all_stock_codes(self) -> List[str]:
         codes = set()
@@ -112,15 +112,6 @@ class MinuteKlineScraper:
         if not records:
             return
         try:
-            codes = set(r["code"] for r in records)
-            dates = [r["date"] for r in records]
-            min_date = min(dates)[:10]
-            max_date = max(dates)[:10]
-            self.collection.delete_many({
-                "code": {"$in": list(codes)},
-                "date": {"$gte": f"{min_date} 00:00", "$lte": f"{max_date} 23:59"}
-            })
-
             operations = [
                 UpdateOne(
                     {"code": r["code"], "date": r["date"]},
@@ -129,9 +120,8 @@ class MinuteKlineScraper:
                 )
                 for r in records
             ]
-            if operations:
-                result = self.collection.bulk_write(operations, ordered=False)
-                logging.info(f"Saved {result.upserted_count + result.modified_count}/{len(records)} bars")
+            result = self.collection.bulk_write(operations, ordered=False)
+            logging.info(f"Saved {result.upserted_count + result.modified_count}/{len(records)} bars")
         except Exception as e:
             logging.error(f"Failed to save {len(records)} bars: {e}")
 
