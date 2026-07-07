@@ -221,10 +221,8 @@ class ReviewService:
     def analyze(code: str, name: str, date_str: str = None) -> Dict[str, Any]:
         if date_str is None:
             date_str = datetime.now().strftime("%Y-%m-%d")
-
         daily_klines = ReviewService._get_daily_klines(code)
         bars_5m = ReviewService._get_5m_klines(code, date_str)
-
         if not bars_5m:
             return {"code": code, "name": name, "conclusion": "跳过", "reason": f"{date_str} 无 5 分钟 K 线数据"}
 

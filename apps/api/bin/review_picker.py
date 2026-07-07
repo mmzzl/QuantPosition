@@ -34,7 +34,7 @@ def load_stocks(path: str) -> List[Dict[str, str]]:
 
 
 def calc_score(r: Dict[str, Any]) -> float:
-    if r["conclusion"] in ("\u8df3\u8fc7", "\u5356\u51fa"):
+    if r["conclusion"] != "\u6301\u6709":
         return -1
 
     score = 40.0
@@ -60,12 +60,7 @@ def calc_score(r: Dict[str, Any]) -> float:
     tail = {"\u62a2\u7b79": 10, "\u65e0\u91cf\u6a2a\u76d8": 0, "\u653e\u91cf\u8df3\u6c34": -15}
     score += tail.get(r["tail_signal"], 0)
 
-    score = max(0, min(100, score))
-
-    if r["conclusion"] != "\u6301\u6709":
-        score = min(score, 70)
-
-    return score
+    return max(0, score)
 
 
 def build_message(results: List[Dict]) -> str:
@@ -82,7 +77,7 @@ def build_message(results: List[Dict]) -> str:
     lines = [
         "\u2501" * 20,
         f"\U0001f50d **{top_r['code']} {top_r['name']}**",
-        f"\U0001f4c8 \u4e70\u5165\u8bc4\u5206\uff1a**{top_s:.0f}/100**",
+        f"\U0001f4c8 \u4e70\u5165\u8bc4\u5206\uff1a**{top_s:.0f}\u5206**",
         f"\U0001f4cc \u65e5\u7ebf\u5b9a\u4f4d\uff1a{top_r['position']}",
         f"\U0001f4ca \u5747\u4ef7\u5206\u6790\uff1a{top_r['vwap_status']}",
         f"\U0001f4cb \u91cf\u80fd\u5206\u6790\uff1a{top_r['volume_signal']}",
