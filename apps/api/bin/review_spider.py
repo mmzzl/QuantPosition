@@ -81,6 +81,7 @@ def _tencent_5m_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict
 class MinuteKlineScraper:
     def __init__(self):
         self.collection = get_db()["stock_kline_5m"]
+        self.collection.create_index([("code", 1), ("date", 1)], background=True)
 
     def _get_all_stock_codes(self) -> List[str]:
         codes = set()
@@ -120,19 +121,17 @@ class MinuteKlineScraper:
                 "date": {"$gte": f"{min_date} 00:00", "$lte": f"{max_date} 23:59"}
             })
 
-            BATCH = 50000
-            for i in range(0, len(records), BATCH):
-                chunk = records[i:i+BATCH]
-                operations = [
-                    UpdateOne(
-                        {"code": r["code"], "date": r["date"]},
-                        {"$set": r},
-                        upsert=True,
-                    )
-                    for r in chunk
-                ]
+            operations = [
+                UpdateOne(
+                    {"code": r["code"], "date": r["date"]},
+                    {"$set": r},
+                    upsert=True,
+                )
+                for r in records
+            ]
+            if operations:
                 result = self.collection.bulk_write(operations, ordered=False)
-                logging.info(f"Saved {result.upserted_count + result.modified_count}/{len(chunk)} bars")
+                logging.info(f"Saved {result.upserted_count + result.modified_count}/{len(records)} bars")
         except Exception as e:
             logging.error(f"Failed to save {len(records)} bars: {e}")
 
@@ -141,8 +140,8 @@ class MinuteKlineScraper:
         total = len(codes)
         workers = 10
         results = {"success": 0, "skipped": 0, "failed": 0}
-        all_records = []
-        records_lock = Lock()
+        pending = []
+        pending_lock = Lock()
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(self._fetch_5m_kline, code): code for code in codes}
@@ -156,18 +155,24 @@ class MinuteKlineScraper:
                     elif not records:
                         results["skipped"] += 1
                     else:
-                        with records_lock:
-                            all_records.extend(records)
+                        with pending_lock:
+                            pending.extend(records)
                         results["success"] += 1
                 except Exception as e:
                     logging.error(f"Error processing {code}: {e}")
                     results["failed"] += 1
 
+                if len(pending) >= 5000:
+                    with pending_lock:
+                        self.save_klines(pending)
+                        pending = []
+
                 if (i + 1) % 500 == 0:
                     logging.info(f"Progress: {i+1}/{total}, success={results['success']}, skipped={results['skipped']}, failed={results['failed']}")
 
-        if all_records:
-            self.save_klines(all_records)
+            with pending_lock:
+                if pending:
+                    self.save_klines(pending)
 
         logging.info(f"5m kline fetch completed: total={total}, success={results['success']}, skipped={results['skipped']}, failed={results['failed']}")
 
