@@ -3,7 +3,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import logging
-from datetime import datetime, date
+from datetime import date
 from database import get_db
 from systems.logs import Log
 from systems.single import ScriptSingle
@@ -12,15 +12,13 @@ from services.review_service import ReviewService
 
 
 def get_target_stocks(db):
-    today_start = datetime.now().strftime("%Y-%m-%d 00:00")
-    today_end = datetime.now().strftime("%Y-%m-%d 23:59")
-
     holdings = list(db.holdings.find({}, {"code": 1, "name": 1, "_id": 0}))
     logging.info(f"持仓数量: {len(holdings)}")
 
+    today_str = date.today().strftime("%Y-%m-%d")
     buy_alerts = list(db.alert_log.find({
         "trigger_type": "buy",
-        "created_at": {"$gte": today_start, "$lte": today_end}
+        "date": today_str
     }, {"code": 1, "_id": 0}))
     logging.info(f"今日推荐买入: {len(buy_alerts)}")
 
