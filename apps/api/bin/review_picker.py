@@ -22,6 +22,8 @@ def load_stocks(path: str) -> List[Dict[str, str]]:
         pure = code.split(".")[-1]
         if not (pure.isdigit() and len(pure) == 6):
             continue
+        if not (code.startswith("sh.6") or code.startswith("sz.0") or code.startswith("bj.8")):
+            continue
         if pure.startswith(("300", "688")):
             continue
         if "ST" in name or "\u9000" in name:
@@ -32,10 +34,10 @@ def load_stocks(path: str) -> List[Dict[str, str]]:
 
 
 def calc_score(r: Dict[str, Any]) -> float:
-    if r["conclusion"] == "\u8df3\u8fc7":
+    if r["conclusion"] in ("\u8df3\u8fc7", "\u5356\u51fa"):
         return -1
 
-    score = 50.0
+    score = 40.0
 
     pos = {"\u4f4e\u4f4d": 25, "\u4e2d\u6bb5": 15, "\u9ad8\u4f4d": -30}
     score += pos.get(r["position"], 0)
@@ -58,12 +60,12 @@ def calc_score(r: Dict[str, Any]) -> float:
     tail = {"\u62a2\u7b79": 10, "\u65e0\u91cf\u6a2a\u76d8": 0, "\u653e\u91cf\u8df3\u6c34": -15}
     score += tail.get(r["tail_signal"], 0)
 
-    if r["conclusion"] == "\u6301\u6709":
-        score += 10
-    elif r["conclusion"] == "\u5356\u51fa":
-        score -= 25
+    score = max(0, min(100, score))
 
-    return max(0, min(100, score))
+    if r["conclusion"] != "\u6301\u6709":
+        score = min(score, 70)
+
+    return score
 
 
 def build_message(results: List[Dict]) -> str:

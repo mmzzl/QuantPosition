@@ -93,7 +93,7 @@ class MinuteKlineScraper:
                 code = str(row.get("code", "")).strip()
                 if code:
                     pure = code.split(".")[-1]
-                    if pure.isdigit():
+                    if pure.isdigit() and (code.startswith("sh.6") or code.startswith("sz.0") or code.startswith("bj.8")):
                         codes.add(pure)
             logging.info(f"Loaded {len(codes)} stock codes from all_stock.csv")
         except Exception as e:
