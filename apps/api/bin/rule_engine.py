@@ -506,6 +506,7 @@ def run_rules_for_holdings():
             })
 
     # 7. 买入信号排序，只保留最高分
+    best = None
     if buy_candidates:
         scorer = StockScorer()
         for c in buy_candidates:

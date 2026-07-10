@@ -35,10 +35,14 @@ def load_stocks(path: str) -> List[Dict[str, str]]:
 
 
 def calc_score(r: Dict[str, Any]) -> float:
-    if r["conclusion"] != "\u6301\u6709":
+    if "scorer_total" in r:
+        return r["scorer_total"]
+    if r["conclusion"] != "持有":
+        r["scorer_total"] = -1
         return -1
     scorer = StockScorer()
     result = scorer.score(r["code"], r["name"], r.get("date", date.today().strftime("%Y-%m-%d")))
+    r["scorer_total"] = result["total"]
     return result["total"]
 
 

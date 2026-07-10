@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Set
 from datetime import date
 
 from database import get_db
@@ -7,8 +7,13 @@ from database import get_db
 logger = logging.getLogger(__name__)
 
 
+def _pure_code(code: str) -> str:
+    return code.split(".")[-1] if "." in code else code
+
+
 class StockScorer:
     MODE_SHORT = "short"
+    _industry_cache: Optional[Dict[str, str]] = None
 
     def __init__(self, db=None):
         self._db = db
@@ -19,7 +24,7 @@ class StockScorer:
         return self._db
 
     def _is_filtered(self, code: str, name: str) -> bool:
-        pure = code.split(".")[-1] if "." in code else code
+        pure = _pure_code(code)
         if not (pure.isdigit() and len(pure) == 6):
             return True
         if pure.startswith(("300", "688")):
@@ -30,7 +35,11 @@ class StockScorer:
                 return True
         return False
 
-    def _load_industry_code(self, code: str) -> Optional[str]:
+    @classmethod
+    def _load_industry_cache(cls):
+        if cls._industry_cache is not None:
+            return
+        cls._industry_cache = {}
         try:
             from systems.sys import home
             import os
@@ -40,19 +49,18 @@ class StockScorer:
                 df = pd.read_csv(path)
                 for _, row in df.iterrows():
                     csv_code = str(row.get("code", "")).strip()
-                    if code in csv_code:
-                        raw = str(row.get("industry", "")).strip()
-                        if raw and raw != "证监会行业分类":
-                            return raw
-            path2 = os.path.join(home(), "apps", "api", "data", "code_to_industry.csv")
-            if os.path.exists(path2):
-                df2 = pd.read_csv(path2)
-                for _, row in df2.iterrows():
-                    if str(row.get("code", "")).strip() == code:
-                        return str(row.get("industry", "")).strip()
+                    raw = str(row.get("industry", "")).strip()
+                    if raw and raw != "证监会行业分类":
+                        pure = _pure_code(csv_code)
+                        if pure.isdigit() and len(pure) == 6:
+                            cls._industry_cache[pure] = raw
         except Exception as e:
-            logger.warning("Failed to load industry for %s: %s", code, e)
-        return None
+            logger.warning("Failed to load industry cache: %s", e)
+
+    def _load_industry_code(self, code: str) -> Optional[str]:
+        self._load_industry_cache()
+        pure = _pure_code(code)
+        return self._industry_cache.get(pure) if self._industry_cache else None
 
     def _load_turnover(self, code: str, date_str: str) -> Optional[float]:
         try:
@@ -79,8 +87,12 @@ class StockScorer:
         if self._is_filtered(code, name):
             return {"code": code, "name": name, "date": date_str,
                     "total": 0, "level": "C",
-                    "breakdown": {"price_volume": {}, "fund_chip": {},
-                                  "sector_theme": {}, "risk": {}}}
+                    "breakdown": {
+                        "price_volume": {"total": 0, "breakdown": {}},
+                        "fund_chip": {"total": 0, "breakdown": {}},
+                        "sector_theme": {"total": 0, "breakdown": {}},
+                        "risk": {"total": 0, "breakdown": {}},
+                    }}
 
         db = self._get_db()
         klines = list(db.stock_kline.find(

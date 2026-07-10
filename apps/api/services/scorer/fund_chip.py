@@ -13,6 +13,10 @@ def clear_cache():
     _cache.clear()
 
 
+def _normalize_ak_code(raw: str) -> str:
+    return raw.split(".")[0].strip().zfill(6)
+
+
 def score_fund_chip(code: str, date_str: str, turnover_pct: Optional[float] = None) -> Dict[str, Any]:
     breakdown = {"fund_flow": 0, "lhb": 0, "chip": 0, "turnover": 0}
     net_amount = None
@@ -24,7 +28,7 @@ def score_fund_chip(code: str, date_str: str, turnover_pct: Optional[float] = No
             _cache[cache_key_ff] = akshare.stock_fund_flow_individual("3日排行")
         df_ff = _cache[cache_key_ff]
         if df_ff is not None and not df_ff.empty:
-            match = df_ff[df_ff["股票代码"].astype(str).str.startswith(code)]
+            match = df_ff[df_ff["股票代码"].astype(str).apply(_normalize_ak_code) == code]
             if not match.empty:
                 row = match.iloc[0]
                 net_amount = float(row["净额"])
@@ -37,14 +41,13 @@ def score_fund_chip(code: str, date_str: str, turnover_pct: Optional[float] = No
         logger.warning("stock_fund_flow_individual failed for %s", code)
 
     # 2.2 龙虎榜 (10pts) — Sina source has no net buy column, just check presence
-    date_compact = date_str.replace("-", "")
-    cache_key_lhb = f"lhb:{date_compact}"
+    cache_key_lhb = f"lhb:{date_str}"
     try:
         if cache_key_lhb not in _cache:
-            _cache[cache_key_lhb] = akshare.stock_lhb_detail_daily_sina(date_compact)
+            _cache[cache_key_lhb] = akshare.stock_lhb_detail_daily_sina(date_str)
         df_lhb = _cache[cache_key_lhb]
         if df_lhb is not None and not df_lhb.empty:
-            match = df_lhb[df_lhb["股票代码"].astype(str).str.startswith(code)]
+            match = df_lhb[df_lhb["股票代码"].astype(str).apply(_normalize_ak_code) == code]
             breakdown["lhb"] = 10 if not match.empty else 5
         else:
             breakdown["lhb"] = 5

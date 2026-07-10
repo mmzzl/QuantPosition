@@ -41,7 +41,8 @@ def score_risk(code: str, name: str, date_str: str,
     bad_news = False
     try:
         if cache_key not in _cache:
-            _cache[cache_key] = akshare.stock_restricted_release_detail_em(date=date_compact)
+            _cache[cache_key] = akshare.stock_restricted_release_detail_em(
+                start_date=date_compact, end_date=date_compact)
         df = _cache[cache_key]
         if df is not None and not df.empty:
             match = df[df["股票代码"].astype(str) == code]
