@@ -17,6 +17,20 @@ def _normalize_ak_code(raw: str) -> str:
     return raw.split(".")[0].strip().zfill(6)
 
 
+def _parse_cn_amount(val: str) -> float:
+    s = str(val).strip()
+    if not s:
+        return 0.0
+    if "亿" in s:
+        return float(s.replace("亿", "")) * 1e8
+    if "万" in s:
+        return float(s.replace("万", "")) * 1e4
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
 def score_fund_chip(code: str, date_str: str, turnover_pct: Optional[float] = None) -> Dict[str, Any]:
     breakdown = {"fund_flow": 0, "lhb": 0, "chip": 0, "turnover": 0}
     net_amount = None
@@ -31,7 +45,7 @@ def score_fund_chip(code: str, date_str: str, turnover_pct: Optional[float] = No
             match = df_ff[df_ff["股票代码"].astype(str).apply(_normalize_ak_code) == code]
             if not match.empty:
                 row = match.iloc[0]
-                net_amount = float(row["净额"])
+                net_amount = _parse_cn_amount(row["资金流入净额"])
                 rank = match.index[0] + 1
                 if net_amount > 0 and rank <= 500:
                     breakdown["fund_flow"] = 12

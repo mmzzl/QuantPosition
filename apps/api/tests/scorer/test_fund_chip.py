@@ -10,8 +10,9 @@ def setup_function():
 
 
 def _mock_fund_flow_df(code="000001", net_amount=100_000_000):
-    data = {"股票代码": [code], "股票简称": ["TestStock"], "最新价": [10.0],
-            "涨跌幅": [2.5], "换手率": [8.0], "净额": [net_amount]}
+    amount_str = f"{net_amount / 1e8:.2f}亿" if net_amount >= 1e8 else f"{net_amount / 1e4:.0f}万"
+    data = {"股票代码": [int(code)], "股票简称": ["TestStock"], "最新价": [10.0],
+            "阶段涨跌幅": ["2.50%"], "连续换手率": ["8.00%"], "资金流入净额": [amount_str]}
     return pd.DataFrame(data)
 
 

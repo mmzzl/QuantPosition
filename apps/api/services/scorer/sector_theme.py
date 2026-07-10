@@ -75,7 +75,8 @@ def score_sector_theme(code: str, date_str: str,
                 if not match.empty:
                     row = match.iloc[0]
                     rank = match.index[0] + 1
-                    industry_return_val = float(row["行业-涨跌幅"])
+                    raw_return = str(row["阶段涨跌幅"]).replace("%", "").strip()
+                    industry_return_val = float(raw_return) if raw_return else None
                     if rank <= 5:
                         breakdown["industry_rank"] = 12
                     elif rank <= 10:

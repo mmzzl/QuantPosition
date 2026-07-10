@@ -13,7 +13,7 @@ def _mock_industry_df(keywords_top):
     data = {
         "行业": [kw[0] for kw in keywords_top],
         "行业指数": [10.0] * len(keywords_top),
-        "行业-涨跌幅": [kw[1] for kw in keywords_top],
+        "阶段涨跌幅": [f"{kw[1]:.2f}%" for kw in keywords_top],
         "净额": [kw[2] for kw in keywords_top],
     }
     return pd.DataFrame(data)
@@ -23,7 +23,7 @@ def _mock_concept_df(keywords_top):
     data = {
         "概念": [kw[0] for kw in keywords_top],
         "概念指数": [10.0] * len(keywords_top),
-        "概念-涨跌幅": [kw[1] for kw in keywords_top],
+        "概念-涨跌幅": [f"{kw[1]:.2f}%" for kw in keywords_top],
         "净额": [kw[2] for kw in keywords_top],
     }
     return pd.DataFrame(data)
