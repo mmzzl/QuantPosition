@@ -17,6 +17,7 @@ from systems.logs import Log
 logger = logging.getLogger(__name__)
 from systems.single import ScriptSingle
 from systems.sys import home
+from services.stock_scorer import StockScorer
 
 
 
@@ -506,19 +507,29 @@ def run_rules_for_holdings():
 
     # 7. 买入信号排序，只保留最高分
     if buy_candidates:
-        buy_candidates.sort(key=lambda x: x["buy_score"], reverse=True)
+        scorer = StockScorer()
+        for c in buy_candidates:
+            result = scorer.score(c["code"], c.get("name", ""))
+            c["scorer_score"] = result["total"]
+            c["scorer_level"] = result["level"]
+
+        buy_candidates.sort(key=lambda x: x["scorer_score"], reverse=True)
         best = buy_candidates[0]
 
+        if best["scorer_score"] < 60:
+            logging.info(f"Best candidate {best['code']} {best['name']} score={best['scorer_score']} < 60,skipping")
+            buy_candidates = []
+            best = None
+
+    if best:
         msg = (
             f"📈 **买入信号** {best['code']} {best['name']}\n"
-            f"**买入评分**: {best['buy_score']:.2f}（候选 {len(buy_candidates)} 只，取最高分）\n"
+            f"**短线评分**: {best['scorer_score']:.0f}分（等级{best['scorer_level']}）\n"
             f"**触发规则**: {best['rule_names']}\n"
             f"**当前价**: {best['price']:.2f}\n"
             f"**建议买入价**: {best['buy_price']:.2f}（当前价 - ATR）\n"
             f"**目标卖出价**: {best['sell_price']:.2f}（当前价 + ATR）\n"
             f"**止损价**: {best['stop_loss']:.2f}（当前价 - 2倍ATR）\n"
-            f"**ATR**: {best['atr']:.2f}\n"
-            f"**风险提示**: 建议分批买入，单只仓位不超过总资金10%\n"
         )
 
         sell_messages.append(msg)
@@ -526,11 +537,11 @@ def run_rules_for_holdings():
             "dedup_key": best["dedup_key"], "code": best["code"],
             "date": today_str, "rule_ids": best["rule_ids"],
             "rule_names": best["rule_names"], "trigger_type": "buy",
-            "sell_score": 0, "buy_score": round(best["buy_score"], 2),
+            "sell_score": 0, "buy_score": round(best["scorer_score"], 2),
             "price": best["price"], "cost": 0, "message": msg,
             "created_at": datetime.now(),
         })
-        logging.info(f"最高分买入信号: {best['code']} {best['name']} score={best['buy_score']:.2f}（共 {len(buy_candidates)} 只候选）")
+        logging.info(f"最高分买入信号: {best['code']} {best['name']} score={best['scorer_score']:.2f}（共 {len(buy_candidates)} 只候选）")
 
     # 8. 推送钉钉，成功后才写告警日志
     if pending_alerts:

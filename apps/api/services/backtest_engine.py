@@ -4,6 +4,7 @@ import random
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
 from database import get_db
+from services.stock_scorer import StockScorer
 
 
 _name_map_cache = None
@@ -295,7 +296,9 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
 
             _, _, buy_score, _ = engine.run(ctx)
             if buy_score > 0:
-                buy_candidates.append((buy_score, code))
+                scorer_result = StockScorer().score(code, name_map.get(code, ""), date_str)
+                if scorer_result["total"] >= 60:
+                    buy_candidates.append((scorer_result["total"], code))
 
         if not buy_candidates:
             continue

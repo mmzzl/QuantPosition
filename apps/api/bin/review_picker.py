@@ -10,6 +10,7 @@ from systems.logs import Log
 from systems.single import ScriptSingle
 from systems.sys import home
 from services.review_service import ReviewService
+from services.stock_scorer import StockScorer
 
 
 def load_stocks(path: str) -> List[Dict[str, str]]:
@@ -36,31 +37,9 @@ def load_stocks(path: str) -> List[Dict[str, str]]:
 def calc_score(r: Dict[str, Any]) -> float:
     if r["conclusion"] != "\u6301\u6709":
         return -1
-
-    score = 40.0
-
-    pos = {"\u4f4e\u4f4d": 25, "\u4e2d\u6bb5": 15, "\u9ad8\u4f4d": -30}
-    score += pos.get(r["position"], 0)
-
-    vwap = {"\u5f3a\u52bf": 25, "\u632f\u8361": 5, "\u5f31\u52bf": -20}
-    score += vwap.get(r["vwap_status"], 0)
-
-    vol = {"\u6d17\u76d8": 20, "\u632f\u8361": 5, "\u8bd5\u76d8": 5, "\u51fa\u8d27": -25}
-    score += vol.get(r["volume_signal"], 0)
-
-    good_patterns = {"\u5c3e\u76d8\u62a2\u7b79\u578b", "\u5355\u8fb9\u632f\u8361\u4e0a\u884c", "U\u578b\u6d17\u76d8\u5206\u65f6"}
-    bad_patterns = {"M\u5934\u5206\u65f6", "\u9ad8\u5f00\u4f4e\u8d70\u9634\u8dcc\u578b", "\u65e9\u76d8\u8109\u51b2\u5168\u5929\u56de\u843d"}
-    if r["pattern"] in good_patterns:
-        score += 20
-    elif r["pattern"] in bad_patterns:
-        score -= 20
-    elif r["pattern"] == "\u632f\u8361\u5e73\u8861\u5f62\u6001":
-        score += 5
-
-    tail = {"\u62a2\u7b79": 10, "\u65e0\u91cf\u6a2a\u76d8": 0, "\u653e\u91cf\u8df3\u6c34": -15}
-    score += tail.get(r["tail_signal"], 0)
-
-    return max(0, score)
+    scorer = StockScorer()
+    result = scorer.score(r["code"], r["name"], r.get("date", date.today().strftime("%Y-%m-%d")))
+    return result["total"]
 
 
 def build_message(results: List[Dict]) -> str:
