@@ -108,7 +108,7 @@ class StockScorer:
         from services.scorer.risk_check import score_risk
 
         pv = score_price_volume(klines, date_str)
-        fc = score_fund_chip(code, date_str, turnover_pct=turnover_pct)
+        fc = score_fund_chip(code, date_str, klines=klines, turnover_pct=turnover_pct)
         st = score_sector_theme(code, date_str, industry_code=industry_code)
         rc = score_risk(code, name, date_str)
 

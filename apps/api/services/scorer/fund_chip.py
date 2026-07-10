@@ -1,8 +1,10 @@
 """资金筹码评分 (35分)"""
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 import akshare
+
+from services.scorer.chip_distribution import compute_chip_distribution
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,9 @@ def _parse_cn_amount(val: str) -> float:
         return 0.0
 
 
-def score_fund_chip(code: str, date_str: str, turnover_pct: Optional[float] = None) -> Dict[str, Any]:
+def score_fund_chip(code: str, date_str: str,
+                    klines: Optional[List[Dict]] = None,
+                    turnover_pct: Optional[float] = None) -> Dict[str, Any]:
     breakdown = {"fund_flow": 0, "lhb": 0, "chip": 0, "turnover": 0}
     net_amount = None
 
@@ -69,22 +73,16 @@ def score_fund_chip(code: str, date_str: str, turnover_pct: Optional[float] = No
         logger.warning("stock_lhb_detail_daily_sina failed for %s", date_str)
         breakdown["lhb"] = 5
 
-    # 2.3 筹码集中度 (8pts)
-    cache_key_cyq = f"cyq:{code}"
-    try:
-        if cache_key_cyq not in _cache:
-            _cache[cache_key_cyq] = akshare.stock_cyq_em(code, adjust="qfq")
-        df_cyq = _cache[cache_key_cyq]
-        if df_cyq is not None and not df_cyq.empty:
-            concentration = float(df_cyq.iloc[0]["90集中度"])
-            if concentration < 10:
-                breakdown["chip"] = 8
-            elif concentration <= 20:
-                breakdown["chip"] = 5
-            else:
-                breakdown["chip"] = 2
-    except Exception:
-        logger.debug("stock_cyq_em failed for %s (东方财富接口预期不可用)", code)
+    # 2.3 筹码集中度 (8pts) — 基于 K 线 + 换手率估算
+    if klines:
+        chip = compute_chip_distribution(klines, date_str, turnover_pct=turnover_pct)
+        conc = chip.get("concentration_90", 999)
+        if conc < 15:
+            breakdown["chip"] = 8
+        elif conc <= 30:
+            breakdown["chip"] = 5
+        else:
+            breakdown["chip"] = 2
 
     # 2.4 换手率 (5pts)
     if turnover_pct is not None:

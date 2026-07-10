@@ -22,22 +22,27 @@ def _mock_lhb_df(code="000001"):
     return pd.DataFrame(data)
 
 
-def _mock_cyq_df(concentration=8.0):
-    data = {"日期": ["2026-07-10"], "获利比例": [60.0], "平均成本": [10.0],
-            "90成本-低": [9.0], "90成本-高": [11.0], "90集中度": [concentration],
-            "70成本-低": [9.5], "70成本-高": [10.5], "70集中度": [concentration * 0.8]}
-    return pd.DataFrame(data)
+def _mock_klines(price=10.0, days=60):
+    klines = []
+    for i in range(days):
+        d = f"2026-{(i//30+4):02d}-{(i%30+1):02d}"
+        klines.append({
+            "date": d, "open": price, "close": price,
+            "high": price * 1.02, "low": price * 0.98,
+            "volume": 1_000_000,
+        })
+    return klines
 
 
 def test_fund_flow_strong():
     with patch("services.scorer.fund_chip.akshare") as mock_ak:
         mock_ak.stock_fund_flow_individual.return_value = _mock_fund_flow_df("000001", 500_000_000)
         mock_ak.stock_lhb_detail_daily_sina.return_value = _mock_lhb_df("000001")
-        mock_ak.stock_cyq_em.return_value = _mock_cyq_df(5.0)
-        result = score_fund_chip("000001", "2026-07-10", turnover_pct=8.0)
+        result = score_fund_chip("000001", "2026-07-10",
+                                  klines=_mock_klines(10.0), turnover_pct=8.0)
     assert result["breakdown"]["fund_flow"] == 12
     assert result["breakdown"]["lhb"] == 10
-    assert result["breakdown"]["chip"] == 8
+    assert result["breakdown"]["chip"] == 8  # concentrated (low 90% band)
     assert result["breakdown"]["turnover"] == 5
     assert result["total"] == 35
 
@@ -45,35 +50,46 @@ def test_fund_flow_strong():
 def test_fund_flow_negative():
     with patch("services.scorer.fund_chip.akshare") as mock_ak:
         mock_ak.stock_fund_flow_individual.return_value = _mock_fund_flow_df("000001", -50_000_000)
-        mock_ak.stock_lhb_detail_daily_sina.return_value = _mock_lhb_df("999999")  # stock NOT on LHB
-        mock_ak.stock_cyq_em.return_value = _mock_cyq_df(25.0)
-        result = score_fund_chip("000001", "2026-07-10", turnover_pct=2.0)
+        mock_ak.stock_lhb_detail_daily_sina.return_value = _mock_lhb_df("999999")
+        result = score_fund_chip("000001", "2026-07-10",
+                                  klines=_mock_klines(20.0), turnover_pct=2.0)
     assert result["breakdown"]["fund_flow"] == 0
     assert result["breakdown"]["lhb"] == 5  # not on LHB → neutral
-    assert result["breakdown"]["chip"] == 2
+    assert result["breakdown"]["chip"] == 8  # computed from klines
     assert result["breakdown"]["turnover"] == 0
-    assert result["total"] == 7
+    assert result["total"] == 13
 
 
 def test_akshare_api_error():
     with patch("services.scorer.fund_chip.akshare") as mock_ak:
         mock_ak.stock_fund_flow_individual.side_effect = Exception("API error")
         mock_ak.stock_lhb_detail_daily_sina.side_effect = Exception("API error")
-        mock_ak.stock_cyq_em.side_effect = Exception("API error")
-        result = score_fund_chip("000001", "2026-07-10", turnover_pct=10.0)
+        result = score_fund_chip("000001", "2026-07-10",
+                                  klines=_mock_klines(15.0), turnover_pct=10.0)
     assert result["breakdown"]["fund_flow"] == 0
     assert result["breakdown"]["lhb"] == 5  # neutral fallback
-    assert result["breakdown"]["chip"] == 0
+    assert result["breakdown"]["chip"] == 8  # still computed from klines
     assert result["breakdown"]["turnover"] == 5
-    assert result["total"] == 10
+    assert result["total"] == 18
+
+
+def test_fund_flow_not_in_rank():
+    """When code not found in the ranking df, fund_flow = 0"""
+    with patch("services.scorer.fund_chip.akshare") as mock_ak:
+        mock_ak.stock_fund_flow_individual.return_value = _mock_fund_flow_df("999999", 100_000_000)
+        mock_ak.stock_lhb_detail_daily_sina.return_value = pd.DataFrame()
+        result = score_fund_chip("000001", "2026-07-10",
+                                  klines=_mock_klines(10.0), turnover_pct=6.0)
+    assert result["breakdown"]["fund_flow"] == 0  # code 000001 not in 999999 df
+    assert result["breakdown"]["lhb"] == 5  # neutral
 
 
 def test_penalty_continuous_outflow():
     with patch("services.scorer.fund_chip.akshare") as mock_ak:
         mock_ak.stock_fund_flow_individual.return_value = _mock_fund_flow_df("000001", -200_000_000)
         mock_ak.stock_lhb_detail_daily_sina.return_value = _mock_lhb_df("000001")
-        mock_ak.stock_cyq_em.return_value = _mock_cyq_df(10.0)
-        result = score_fund_chip("000001", "2026-07-10", turnover_pct=8.0)
+        result = score_fund_chip("000001", "2026-07-10",
+                                  klines=_mock_klines(10.0), turnover_pct=8.0)
     assert result["total"] == 0
 
 
@@ -82,19 +98,9 @@ def test_cache_hit():
     with patch("services.scorer.fund_chip.akshare") as mock_ak:
         mock_ak.stock_fund_flow_individual.return_value = _mock_fund_flow_df("000001", 100_000_000)
         mock_ak.stock_lhb_detail_daily_sina.return_value = _mock_lhb_df("000001")
-        mock_ak.stock_cyq_em.return_value = _mock_cyq_df(5.0)
-        _ = score_fund_chip("000001", "2026-07-10", turnover_pct=8.0)
+        _ = score_fund_chip("000001", "2026-07-10",
+                             klines=_mock_klines(10.0), turnover_pct=8.0)
         call_count = mock_ak.stock_fund_flow_individual.call_count
-        _ = score_fund_chip("000001", "2026-07-10", turnover_pct=8.0)
+        _ = score_fund_chip("000001", "2026-07-10",
+                             klines=_mock_klines(10.0), turnover_pct=8.0)
         assert mock_ak.stock_fund_flow_individual.call_count == call_count
-
-
-def test_fund_flow_not_in_rank():
-    """When code not found in the ranking df, fund_flow = 0"""
-    with patch("services.scorer.fund_chip.akshare") as mock_ak:
-        mock_ak.stock_fund_flow_individual.return_value = _mock_fund_flow_df("999999", 100_000_000)
-        mock_ak.stock_lhb_detail_daily_sina.return_value = pd.DataFrame()
-        mock_ak.stock_cyq_em.return_value = _mock_cyq_df(15.0)
-        result = score_fund_chip("000001", "2026-07-10", turnover_pct=6.0)
-    assert result["breakdown"]["fund_flow"] == 0  # code 000001 not in 999999 df
-    assert result["breakdown"]["lhb"] == 5  # neutral
