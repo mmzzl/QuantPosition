@@ -84,7 +84,7 @@ def score_fund_chip(code: str, date_str: str, turnover_pct: Optional[float] = No
             else:
                 breakdown["chip"] = 2
     except Exception:
-        logger.warning("stock_cyq_em failed for %s", code)
+        logger.debug("stock_cyq_em failed for %s (东方财富接口预期不可用)", code)
 
     # 2.4 换手率 (5pts)
     if turnover_pct is not None:

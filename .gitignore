@@ -15,3 +15,5 @@ logs/*
 apps/api/logs/*
 apps/api/var/run/*
 apps/api/bin/spider_progress.json
+# Added by code-review-graph
+.code-review-graph/

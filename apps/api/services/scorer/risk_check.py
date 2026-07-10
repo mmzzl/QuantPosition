@@ -49,7 +49,7 @@ def score_risk(code: str, name: str, date_str: str,
             if not match.empty:
                 bad_news = True
     except Exception:
-        logger.warning("stock_restricted_release_detail_em failed for %s", date_str)
+        logger.debug("stock_restricted_release_detail_em failed for %s (东方财富接口预期不可用)", date_str)
 
     breakdown["bad_news"] = 0 if bad_news else 1
     total = sum(breakdown.values())
