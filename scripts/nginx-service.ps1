@@ -22,7 +22,17 @@ $NginxDir = 'C:\nginx-1.30.3'
 $NginxExe = $NginxDir + '\nginx.exe'
 $NginxConf = $NginxDir + '\conf\nginx.conf'
 
+function Require-Admin {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal $identity
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Write-Host '[ERR] ADMIN RIGHTS REQUIRED - run PowerShell as Administrator'
+        exit 1
+    }
+}
+
 function Check-Prereqs {
+    Require-Admin
     if (-not (Get-Command nssm -ErrorAction SilentlyContinue)) {
         Write-Host '[ERR] nssm not found'
         exit 1
