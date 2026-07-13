@@ -156,7 +156,13 @@ CSV 数据文件位于 `apps/api/data/`：
 
 | 路径 | 说明 |
 |------|------|
-| `POST /auth/login` | 登录 |
+| `POST /auth/login` | 登录获取 Token |
+| `POST /auth/register` | 注册新用户 |
+| `GET /holdings/{user_id}` | 持仓列表 |
+| `POST /holdings/{user_id}` | 买入同步（记录买入 + 摊薄成本） |
+| `POST /holdings/{user_id}/{code}/sell` | 卖出同步（扣减持仓 + 计算盈亏） |
+| `GET /holdings/transactions/{user_id}` | 交易记录 |
+| `GET /holdings/pnl/{user_id}` | 已实现盈亏汇总 |
 | `GET /settings/public` | 公开设置（无需登录） |
 | `GET /news` | 新闻列表 |
 | `GET /sectors/heatmap` | 板块热力图 |
@@ -175,3 +181,67 @@ CSV 数据文件位于 `apps/api/data/`：
 | `GET /backtest/latest` | 最新回测结果 |
 | `GET /settings` | 系统设置（需管理员） |
 | `PUT /settings` | 更新系统设置 |
+
+## 实盘交易同步
+
+### 获取 Token
+
+```bash
+# 默认管理员：admin / admin123
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "admin123"}'
+```
+
+返回示例：
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1Ni...",
+  "token_type": "bearer",
+  "user_id": "67f8a1b2c3d4e5f6a7b8c9d0",
+  "role": "super_admin"
+}
+```
+
+> Token 有效期默认 30 分钟，过期后需重新登录。
+
+### 买入同步
+
+在东方财富买入股票后，调用此接口记录到系统：
+
+```bash
+curl -X POST http://localhost:8000/holdings/{user_id} \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer {token}" \
+  -d '{"code": "000001", "name": "平安银行", "quantity": 1000, "average_cost": 11.50}'
+```
+
+- 同一股票再次买入自动**摊薄成本**
+- 自动计算买入费用（佣金 + 过户费）
+- 记录买入交易流水
+
+### 卖出同步
+
+```bash
+curl -X POST http://localhost:8000/holdings/{user_id}/{code}/sell \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer {token}" \
+  -d '{"quantity": 500, "price": 12.00}'
+```
+
+- 支持**分批卖出**，系统自动扣减持仓数量
+- 计算已实现盈亏 = 卖出净额 - 卖出部分成本（含印花税+佣金+过户费）
+- 清仓后自动删除持仓记录
+
+### 查询
+
+```bash
+# 持仓列表
+curl -H "Authorization: Bearer {token}" http://localhost:8000/holdings/{user_id}
+
+# 交易记录
+curl -H "Authorization: Bearer {token}" http://localhost:8000/holdings/transactions/{user_id}
+
+# 已实现盈亏
+curl -H "Authorization: Bearer {token}" http://localhost:8000/holdings/pnl/{user_id}
+```
