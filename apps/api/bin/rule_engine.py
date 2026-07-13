@@ -400,110 +400,117 @@ def run_rules_for_holdings():
     pending_alerts = []
 
     # 6. 执行规则扫描
-    for code in all_codes:
-        klines = stock_klines_all.get(code, [])
-        if not klines or len(klines) < 20:
-            continue
+    total = len(all_codes)
+    for idx, code in enumerate(all_codes, 1):
+        if idx % 200 == 0 or idx == 1 or idx == total:
+            logging.info(f"[RULE_ENGINE] 扫描进度: {idx}/{total}")
 
-        stock_data, atr = build_stock_indicators(klines)
-        stock_data["name"] = name_map.get(code, "")
-        is_holding = code in holding_map
-
-        if is_holding:
-            # 持仓股票：只执行卖出/风控规则
-            h = holding_map[code]
-            position = {
-                "has_pos": True,
-                "cost": h.get("average_cost", 0),
-                "buy_date": h["created_at"].date() if isinstance(h.get("created_at"), datetime) else None,
-            }
-            ctx = engine.build_context(stock_data, position)
-            risk, sell_sc, buy_sc, triggered = engine.run(ctx)
-
-            if not triggered:
+        try:
+            klines = stock_klines_all.get(code, [])
+            if not klines or len(klines) < 20:
                 continue
 
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            rule_ids = sorted(r["rule_id"] for r in triggered)
-            dedup_key = f"{code}|{today_str}|{rule_ids}"
+            stock_data, atr = build_stock_indicators(klines)
+            stock_data["name"] = name_map.get(code, "")
+            is_holding = code in holding_map
 
-            if db.alert_log.find_one({"dedup_key": dedup_key}):
-                logging.info(f"跳过重复告警: {dedup_key}")
-                continue
+            if is_holding:
+                # 持仓股票：只执行卖出/风控规则
+                h = holding_map[code]
+                position = {
+                    "has_pos": True,
+                    "cost": h.get("average_cost", 0),
+                    "buy_date": h["created_at"].date() if isinstance(h.get("created_at"), datetime) else None,
+                }
+                ctx = engine.build_context(stock_data, position)
+                risk, sell_sc, buy_sc, triggered = engine.run(ctx)
 
-            rule_names = ", ".join(r["name"] for r in triggered)
-            _, sell_price, stop_loss = suggest_prices(stock_data, atr)
+                if not triggered:
+                    continue
 
-            if risk:
-                msg = (
-                    f"🚨 **风控预警** {code} {stock_data['name']}\n"
-                    f"**触发规则**: {rule_names}\n"
-                    f"**当前价**: {stock_data['close']:.2f} | **成本**: {position['cost']:.2f}\n"
-                    f"**止损价**: {stop_loss:.2f} | **ATR**: {atr:.2f}\n"
-                    f"**风险提示**: 请立即评估是否需要止损\n"
-                )
-                sell_messages.append(msg)
-                pending_alerts.append({
-                    "dedup_key": dedup_key, "code": code, "date": today_str,
-                    "rule_ids": rule_ids, "rule_names": rule_names,
-                    "trigger_type": "risk", "sell_score": round(sell_sc, 2),
-                    "buy_score": 0, "price": stock_data["close"],
-                    "cost": position["cost"], "message": msg,
-                    "created_at": datetime.now(),
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                rule_ids = sorted(r["rule_id"] for r in triggered)
+                dedup_key = f"{code}|{today_str}|{rule_ids}"
+
+                if db.alert_log.find_one({"dedup_key": dedup_key}):
+                    logging.info(f"跳过重复告警: {dedup_key}")
+                    continue
+
+                rule_names = ", ".join(r["name"] for r in triggered)
+                _, sell_price, stop_loss = suggest_prices(stock_data, atr)
+
+                if risk:
+                    msg = (
+                        f"🚨 **风控预警** {code} {stock_data['name']}\n"
+                        f"**触发规则**: {rule_names}\n"
+                        f"**当前价**: {stock_data['close']:.2f} | **成本**: {position['cost']:.2f}\n"
+                        f"**止损价**: {stop_loss:.2f} | **ATR**: {atr:.2f}\n"
+                        f"**风险提示**: 请立即评估是否需要止损\n"
+                    )
+                    sell_messages.append(msg)
+                    pending_alerts.append({
+                        "dedup_key": dedup_key, "code": code, "date": today_str,
+                        "rule_ids": rule_ids, "rule_names": rule_names,
+                        "trigger_type": "risk", "sell_score": round(sell_sc, 2),
+                        "buy_score": 0, "price": stock_data["close"],
+                        "cost": position["cost"], "message": msg,
+                        "created_at": datetime.now(),
+                    })
+                elif sell_sc > 0:
+                    pnl_pct = round((stock_data["close"] - position["cost"]) / position["cost"] * 100, 2) if position["cost"] > 0 else 0
+                    msg = (
+                        f"📉 **卖出信号** {code} {stock_data['name']}\n"
+                        f"**触发规则**: {rule_names}\n"
+                        f"**卖出评分**: {sell_sc:.2f}\n"
+                        f"**当前价**: {stock_data['close']:.2f} | **成本**: {position['cost']:.2f} | **盈亏**: {pnl_pct:+.2f}%\n"
+                        f"**建议卖出价**: {sell_price:.2f} | **ATR**: {atr:.2f}\n"
+                    )
+                    sell_messages.append(msg)
+                    pending_alerts.append({
+                        "dedup_key": dedup_key, "code": code, "date": today_str,
+                        "rule_ids": rule_ids, "rule_names": rule_names,
+                        "trigger_type": "sell", "sell_score": round(sell_sc, 2),
+                        "buy_score": 0, "price": stock_data["close"],
+                        "cost": position["cost"], "message": msg,
+                        "created_at": datetime.now(),
+                    })
+
+            else:
+                # 非持仓股票：只执行买入规则
+                position = {"has_pos": False, "cost": 0, "buy_date": None}
+                ctx = engine.build_context(stock_data, position)
+                risk, sell_sc, buy_sc, triggered = engine.run(ctx)
+
+                if buy_sc <= 0 or not triggered:
+                    continue
+
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                rule_ids = sorted(r["rule_id"] for r in triggered)
+                dedup_key = f"{code}|{today_str}|{rule_ids}"
+
+                if db.alert_log.find_one({"dedup_key": dedup_key}):
+                    continue
+
+                rule_names = ", ".join(r["name"] for r in triggered)
+                buy_price, sell_price, stop_loss = suggest_prices(stock_data, atr)
+
+                buy_candidates.append({
+                    "code": code,
+                    "name": stock_data["name"],
+                    "buy_score": buy_sc,
+                    "price": stock_data["close"],
+                    "atr": atr,
+                    "buy_price": buy_price,
+                    "sell_price": sell_price,
+                    "stop_loss": stop_loss,
+                    "rule_names": rule_names,
+                    "rule_ids": rule_ids,
+                    "dedup_key": dedup_key,
+                    "stock_data": stock_data,
+                    "triggered": triggered,
                 })
-            elif sell_sc > 0:
-                pnl_pct = round((stock_data["close"] - position["cost"]) / position["cost"] * 100, 2) if position["cost"] > 0 else 0
-                msg = (
-                    f"📉 **卖出信号** {code} {stock_data['name']}\n"
-                    f"**触发规则**: {rule_names}\n"
-                    f"**卖出评分**: {sell_sc:.2f}\n"
-                    f"**当前价**: {stock_data['close']:.2f} | **成本**: {position['cost']:.2f} | **盈亏**: {pnl_pct:+.2f}%\n"
-                    f"**建议卖出价**: {sell_price:.2f} | **ATR**: {atr:.2f}\n"
-                )
-                sell_messages.append(msg)
-                pending_alerts.append({
-                    "dedup_key": dedup_key, "code": code, "date": today_str,
-                    "rule_ids": rule_ids, "rule_names": rule_names,
-                    "trigger_type": "sell", "sell_score": round(sell_sc, 2),
-                    "buy_score": 0, "price": stock_data["close"],
-                    "cost": position["cost"], "message": msg,
-                    "created_at": datetime.now(),
-                })
-
-        else:
-            # 非持仓股票：只执行买入规则
-            position = {"has_pos": False, "cost": 0, "buy_date": None}
-            ctx = engine.build_context(stock_data, position)
-            risk, sell_sc, buy_sc, triggered = engine.run(ctx)
-
-            if buy_sc <= 0 or not triggered:
-                continue
-
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            rule_ids = sorted(r["rule_id"] for r in triggered)
-            dedup_key = f"{code}|{today_str}|{rule_ids}"
-
-            if db.alert_log.find_one({"dedup_key": dedup_key}):
-                continue
-
-            rule_names = ", ".join(r["name"] for r in triggered)
-            buy_price, sell_price, stop_loss = suggest_prices(stock_data, atr)
-
-            buy_candidates.append({
-                "code": code,
-                "name": stock_data["name"],
-                "buy_score": buy_sc,
-                "price": stock_data["close"],
-                "atr": atr,
-                "buy_price": buy_price,
-                "sell_price": sell_price,
-                "stop_loss": stop_loss,
-                "rule_names": rule_names,
-                "rule_ids": rule_ids,
-                "dedup_key": dedup_key,
-                "stock_data": stock_data,
-                "triggered": triggered,
-            })
+        except Exception as e:
+            logging.warning(f"[RULE_ENGINE] 跳过 {code}（{name_map.get(code, '')}）处理异常: {e}")
 
     # 7. 买入信号排序，只保留最高分
     best = None
