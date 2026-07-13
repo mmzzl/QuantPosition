@@ -13,7 +13,7 @@ def test_concentrated_chip():
     ]
     result = compute_chip_distribution(klines, "2026-07-10", turnover_pct=5.0)
     assert result["concentration_90"] < 15
-    assert result["avg_cost"] == 10.0
+    assert abs(result["avg_cost"] - 10.0) < 0.1
 
 
 def test_wide_chip():

@@ -8,6 +8,7 @@
 
 参考实现: 通达信/同花顺筹码分布算法，指数衰减，λ=1
 """
+import math
 import logging
 from typing import List, Dict, Any, Optional
 
@@ -76,8 +77,7 @@ def compute_chip_distribution(
             continue
 
         daily_per_bin = vol / num_levels
-        decay = DECAY_LAMBDA * cum_turn
-        weight = 1.0 / (1.0 + decay)
+        weight = math.exp(-DECAY_LAMBDA * cum_turn)
 
         for i in range(start_idx, end_idx + 1):
             chips[i] += daily_per_bin * weight
