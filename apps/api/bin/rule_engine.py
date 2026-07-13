@@ -13,7 +13,6 @@ import requests
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse, quote
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from systems.logs import Log
 
 logger = logging.getLogger(__name__)
@@ -517,25 +516,19 @@ def run_rules_for_holdings():
     # 7. 买入信号评分 + 排序，只保留最高分
     best = None
     if buy_candidates:
-        socket.setdefaulttimeout(30)  # 防止 akshare HTTP 调用无限卡死
+        socket.setdefaulttimeout(30)
         scorer = StockScorer()
         total_candidates = len(buy_candidates)
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            for i, c in enumerate(buy_candidates, 1):
-                logging.info(f"[RULE_ENGINE] 评分进度: {i}/{total_candidates} {c['code']} {c.get('name', '')}")
-                try:
-                    future = pool.submit(scorer.score, c["code"], c.get("name", ""))
-                    result = future.result(timeout=45)
-                    c["scorer_score"] = result["total"]
-                    c["scorer_level"] = result["level"]
-                except TimeoutError:
-                    logging.warning(f"[RULE_ENGINE] {c['code']} 评分超时（45s），跳过")
-                    c["scorer_score"] = -1
-                    c["scorer_level"] = "C"
-                except Exception as e:
-                    logging.warning(f"[RULE_ENGINE] {c['code']} 评分异常: {e}")
-                    c["scorer_score"] = -1
-                    c["scorer_level"] = "C"
+        for i, c in enumerate(buy_candidates, 1):
+            logging.info(f"[RULE_ENGINE] 评分进度: {i}/{total_candidates} {c['code']} {c.get('name', '')}")
+            try:
+                result = scorer.score(c["code"], c.get("name", ""))
+                c["scorer_score"] = result["total"]
+                c["scorer_level"] = result["level"]
+            except Exception as e:
+                logging.warning(f"[RULE_ENGINE] {c['code']} 评分异常: {e}")
+                c["scorer_score"] = -1
+                c["scorer_level"] = "C"
 
         buy_candidates = [c for c in buy_candidates if c["scorer_score"] >= 0]
         buy_candidates.sort(key=lambda x: x["scorer_score"], reverse=True)

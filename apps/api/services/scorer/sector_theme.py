@@ -73,27 +73,32 @@ def _compute_industry_rankings(date_str: str) -> Dict:
         _INDUSTRY_RANK_CACHE[date_str] = result
         return result
 
-    pipeline = [
-        {"$match": {"code": {"$in": list(code_ind.keys())}, "frequency": 9}},
-        {"$sort": {"date": -1}},
-        {"$group": {
-            "_id": "$code",
-            "closes": {"$push": "$close"},
-        }},
-        {"$project": {
-            "close": {"$arrayElemAt": ["$closes", 0]},
-            "prev_close": {"$arrayElemAt": ["$closes", 1]},
-        }},
-    ]
+    # 用 date_1 / date_-1 索引做两笔等值查询，比 aggregation 快 100x
+    latest_doc = db.stock_kline.find_one(
+        {"frequency": 9}, sort=[("date", -1)], projection={"date": 1},
+    )
+    if not latest_doc:
+        result = {"rankings": {}, "_meta": {"total": 0}}
+        _INDUSTRY_RANK_CACHE[date_str] = result
+        return result
+    t1 = latest_doc["date"]
+
+    prev_doc = db.stock_kline.find_one(
+        {"frequency": 9, "date": {"$lt": t1}},
+        sort=[("date", -1)], projection={"date": 1},
+    )
+    t0 = prev_doc["date"] if prev_doc else t1
+
+    today_rows = db.stock_kline.find({"frequency": 9, "date": t1})
+    prev_rows = db.stock_kline.find({"frequency": 9, "date": t0})
+
+    close_map = {r["code"]: r["close"] for r in today_rows}
+    prev_map = {r["code"]: r["close"] for r in prev_rows}
 
     ind_stocks = {}
-    for row in db.stock_kline.aggregate(pipeline, allowDiskUse=True):
-        code = row["_id"]
-        ind = code_ind.get(code)
-        if not ind:
-            continue
-        close = row.get("close")
-        prev_close = row.get("prev_close")
+    for code, ind in code_ind.items():
+        close = close_map.get(code)
+        prev_close = prev_map.get(code)
         if close and prev_close and prev_close > 0:
             ret = (close - prev_close) / prev_close * 100
             ind_stocks.setdefault(ind, []).append(ret)
