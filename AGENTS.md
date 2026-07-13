@@ -8,6 +8,32 @@ specs/005-sector-heatmap/plan.md
 - **Feature**: 板块热力图
 - **Spec**: specs/005-sector-heatmap/spec.md
 
+## 实盘交易同步 API
+
+### 获取 Token
+```bash
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "admin123"}'
+# 返回: {"access_token":"eyJ...","token_type":"bearer","user_id":"...","role":"super_admin"}
+```
+
+### 买入同步
+```bash
+curl -X POST http://localhost:8000/holdings/{user_id} \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer {token}" \
+  -d '{"code": "000001", "name": "平安银行", "quantity": 1000, "average_cost": 11.50}'
+```
+
+### 卖出同步
+```bash
+curl -X POST http://localhost:8000/holdings/{user_id}/{code}/sell \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer {token}" \
+  -d '{"quantity": 500, "price": 12.00}'
+```
+
 ## 技术栈
 - Python 3.12 + FastAPI
 - MongoDB (pymongo)
@@ -15,6 +41,22 @@ specs/005-sector-heatmap/plan.md
 - 密码加密 (passlib/bcrypt)
 - Vue 3 + Element Plus
 - Apache ECharts (K线图)
+## Nginx 管理
+```bash
+# 安装为 Windows 服务并启动
+powershell -File scripts/nginx-service.ps1 install
+
+# 启动/停止/重启/状态
+powershell -File scripts/nginx-service.ps1 start
+powershell -File scripts/nginx-service.ps1 stop
+powershell -File scripts/nginx-service.ps1 restart
+powershell -File scripts/nginx-service.ps1 status
+
+# 卸载服务
+powershell -File scripts/nginx-service.ps1 remove
+```
+nginx 路径: `C:\nginx-1.30.3\`，配置文件: `C:\nginx-1.30.3\conf\nginx.conf`
+
 ### 约束
 - 先想清楚再写
 - 不明白的先问
