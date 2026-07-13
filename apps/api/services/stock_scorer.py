@@ -116,11 +116,11 @@ class StockScorer:
         if rc.get("veto") or total == 0:
             total = 0
 
-        if total >= 80:
+        if total >= 60:
             level = "S"
-        elif total >= 60:
+        elif total >= 45:
             level = "A"
-        elif total >= 40:
+        elif total >= 30:
             level = "B"
         else:
             level = "C"

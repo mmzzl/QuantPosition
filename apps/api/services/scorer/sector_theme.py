@@ -1,8 +1,6 @@
-"""题材板块评分 (20分)"""
+"""题材板块评分 (20分) — 本地 MongoDB 聚合，无外部 API 依赖"""
 import logging
 from typing import Dict, Any, Optional, List
-
-import akshare
 
 logger = logging.getLogger(__name__)
 
@@ -36,47 +34,101 @@ INDUSTRY_MAP = {
     "S91": "综合",
 }
 
-_cache: Dict[str, Any] = {}
+_INDUSTRY_RANK_CACHE: Dict[str, Any] = {}
 
 
 def clear_cache():
-    _cache.clear()
+    _INDUSTRY_RANK_CACHE.clear()
 
 
 def _extract_prefix(industry_code: str) -> str:
     if industry_code in INDUSTRY_MAP:
         return industry_code
-    for i in range(1, len(industry_code)):
-        if industry_code[i:].isdigit() and not industry_code[:i].isdigit():
-            return industry_code[:i]
+    for prefix in sorted(INDUSTRY_MAP.keys(), key=len, reverse=True):
+        if industry_code.startswith(prefix):
+            return prefix
     return industry_code
+
+
+def _compute_industry_rankings(date_str: str) -> Dict:
+    """从 MongoDB 聚合计算行业平均涨跌幅排名，按 date_str 缓存"""
+    if date_str in _INDUSTRY_RANK_CACHE:
+        return _INDUSTRY_RANK_CACHE[date_str]
+
+    from database import get_db
+    db = get_db()
+
+    sectors = list(db.sector_stocks.find({}, {"stock_code": 1, "sector_code": 1}))
+    code_ind = {}
+    for s in sectors:
+        code = (s.get("stock_code") or "").split(".")[-1]
+        sc = s.get("sector_code", "")
+        prefix = _extract_prefix(sc) if sc else sc
+        mapped = INDUSTRY_MAP.get(prefix)
+        if code and mapped:
+            code_ind[code] = mapped
+
+    if not code_ind:
+        result = {"rankings": {}, "_meta": {"total": 0}}
+        _INDUSTRY_RANK_CACHE[date_str] = result
+        return result
+
+    pipeline = [
+        {"$match": {"code": {"$in": list(code_ind.keys())}, "frequency": 9}},
+        {"$sort": {"date": -1}},
+        {"$group": {
+            "_id": "$code",
+            "closes": {"$push": "$close"},
+        }},
+        {"$project": {
+            "close": {"$arrayElemAt": ["$closes", 0]},
+            "prev_close": {"$arrayElemAt": ["$closes", 1]},
+        }},
+    ]
+
+    ind_stocks = {}
+    for row in db.stock_kline.aggregate(pipeline, allowDiskUse=True):
+        code = row["_id"]
+        ind = code_ind.get(code)
+        if not ind:
+            continue
+        close = row.get("close")
+        prev_close = row.get("prev_close")
+        if close and prev_close and prev_close > 0:
+            ret = (close - prev_close) / prev_close * 100
+            ind_stocks.setdefault(ind, []).append(ret)
+
+    ind_avg = {ind: sum(rets) / len(rets) for ind, rets in ind_stocks.items() if rets}
+    ranked = sorted(ind_avg.items(), key=lambda x: x[1], reverse=True)
+
+    result = {
+        "rankings": {
+            ind: {"rank": i + 1, "return": ret, "total": len(ranked)}
+            for i, (ind, ret) in enumerate(ranked)
+        },
+        "_meta": {"total": len(ranked)},
+    }
+    _INDUSTRY_RANK_CACHE[date_str] = result
+    return result
 
 
 def score_sector_theme(code: str, date_str: str,
                        industry_code: Optional[str] = None,
                        concepts: Optional[List[str]] = None) -> Dict[str, Any]:
-    breakdown = {"industry_rank": 0, "industry_return": 0, "concept": 0}
+    breakdown = {"industry_rank": 0, "industry_return": 0}
     industry_return_val = None
 
-    if concepts is None:
-        concepts = []
-
-    # 3.1 板块资金热度 (12pts) & 3.2 板块指数涨幅 (5pts)
     if industry_code is not None:
-        prefix = _extract_prefix(industry_code)
-        mapped_industry = INDUSTRY_MAP.get(prefix)
         try:
-            cache_key = "industry_flow:3日排行"
-            if cache_key not in _cache:
-                _cache[cache_key] = akshare.stock_fund_flow_industry("3日排行")
-            df_ind = _cache[cache_key]
-            if mapped_industry is not None and df_ind is not None and not df_ind.empty:
-                match = df_ind[df_ind["行业"].astype(str).str.contains(mapped_industry)]
-                if not match.empty:
-                    row = match.iloc[0]
-                    rank = match.index[0] + 1
-                    raw_return = str(row["阶段涨跌幅"]).replace("%", "").strip()
-                    industry_return_val = float(raw_return) if raw_return else None
+            rankings = _compute_industry_rankings(date_str)
+            total_industries = rankings["_meta"]["total"]
+            if total_industries > 0:
+                prefix = _extract_prefix(industry_code)
+                mapped_industry = INDUSTRY_MAP.get(prefix)
+                if mapped_industry and mapped_industry in rankings["rankings"]:
+                    info = rankings["rankings"][mapped_industry]
+                    rank = info["rank"]
+                    industry_return_val = info["return"]
                     if rank <= 5:
                         breakdown["industry_rank"] = 12
                     elif rank <= 10:
@@ -88,21 +140,7 @@ def score_sector_theme(code: str, date_str: str,
                     elif industry_return_val > 1:
                         breakdown["industry_return"] = 3
         except Exception:
-            logger.warning("stock_fund_flow_industry failed for %s", industry_code)
-
-    # 3.3 概念热点 (3pts)
-    if concepts:
-        try:
-            cache_key_concept = "concept_flow:3日排行"
-            if cache_key_concept not in _cache:
-                _cache[cache_key_concept] = akshare.stock_fund_flow_concept("3日排行")
-            df_concept = _cache[cache_key_concept]
-            if df_concept is not None and not df_concept.empty:
-                top5 = set(df_concept["概念"].astype(str).head(5).tolist())
-                if any(c in top5 for c in concepts):
-                    breakdown["concept"] = 3
-        except Exception:
-            logger.warning("stock_fund_flow_concept failed")
+            logger.warning("industry ranking failed for %s", industry_code)
 
     total = sum(breakdown.values())
     if industry_return_val is not None and industry_return_val < -3:
