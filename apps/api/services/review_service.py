@@ -182,6 +182,20 @@ class ReviewService:
                 "strategy": "主力故意砸盘吓散户，坚定持有，次日修复可加仓",
             }
 
+        if intention == "出货风险":
+            return {
+                "conclusion": "卖出",
+                "reason": f"出货风险：{(main_force or {}).get('intention_detail', '中段价量背离')}",
+                "strategy": "次日开盘减仓，观察能否站稳支撑，继续走弱则清仓",
+            }
+
+        if intention == "高位震荡":
+            return {
+                "conclusion": "观望",
+                "reason": "高位+量价尚可，但向上空间有限",
+                "strategy": "轻仓观望，不放量突破前高不加仓",
+            }
+
         # ── 原有信号逻辑作为兜底 ──
         sell_signals = 0
 
@@ -287,7 +301,7 @@ class ReviewService:
         if limit_idx:
             idx = limit_idx[-1]  # 最近一次涨停
             days_after = len(recent) - 1 - idx
-            vol_after = sum(volumes[idx:]) / max(days_after, 1)
+            vol_after = sum(volumes[idx+1:]) / max(days_after, 1)
             vol_ratio = vol_after / max(avg_vol, 1)
 
             if days_after >= 1:
@@ -349,7 +363,13 @@ class ReviewService:
         low_10 = min(lows[-10:])
         low_idx = lows[-10:].index(low_10) if len(lows) >= 10 else 0
         if 2 < low_idx < 8:
-            patterns.append("W底")
+            threshold = low_10 * 1.02
+            before = lows[-10:-10 + low_idx]
+            after = lows[-10 + low_idx + 1:]
+            near_before = sum(1 for x in before if x <= threshold) if before else 0
+            near_after = sum(1 for x in after if x <= threshold) if after else 0
+            if near_before >= 1 and near_after >= 1:
+                patterns.append("W底")
 
         if len(closes) >= 3:
             prev_close = closes[-3]
