@@ -56,6 +56,9 @@ INTENTION_ICON = {
 def calc_score(r: Dict[str, Any]) -> float:
     if "scorer_total" in r:
         return r["scorer_total"]
+    if r.get("conclusion") != "持有":
+        r["scorer_total"] = -1
+        return -1
     intention = r.get("main_force_intention", "")
     bonus = INTENTION_BONUS.get(intention, 0)
     if bonus < 0:

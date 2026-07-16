@@ -1,6 +1,5 @@
-import math
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 
 
 class ReviewService:
@@ -340,37 +339,30 @@ class ReviewService:
 
         elif position == "中段":
             # Layer 2+4: 量能 + 盘口验证
+            has_recovery_pattern = "假破位" in daily_patterns or "长下影" in daily_patterns
+
             is_wash = (
                 volume_signal in ("洗盘", "试盘")
                 and vwap_status != "弱势"
                 and tail_signal != "放量跳水"
             )
-            is_fake_dist = (
-                volume_signal == "出货"
-                and vwap_status != "弱势"
-                and tail_signal not in ("放量跳水",)
-                and "假破位" in daily_patterns
-            )
-            is_dist = (
-                volume_signal == "出货"
-                and vwap_status == "弱势"
-                and pattern in ("M头分时", "高开低走阴跌型", "早盘脉冲全天回落")
-            )
 
-            if is_dist and is_fake_dist:
-                intention = "假出货诱空"
-                detail_parts.append("中段+疑似出货但位置不高+形态修复")
-                confidence = "中"
-            elif is_dist:
-                intention = "出货风险"
-                detail_parts.append("中段+价量背离+分时弱势")
-                confidence = "中"
-            elif is_fake_dist:
-                intention = "假出货诱空"
-                detail_parts.append("中段+假破位+假跳水")
-                confidence = "高"
-                if "长下影" in daily_patterns:
-                    detail_parts.append("长下影确认支撑")
+            if volume_signal == "出货":
+                has_bearish_pattern = pattern in ("M头分时", "高开低走阴跌型", "早盘脉冲全天回落")
+                if has_recovery_pattern:
+                    intention = "假出货诱空"
+                    detail_parts.append("中段+出货假象+形态修复")
+                    confidence = "高" if vwap_status != "弱势" else "中"
+                    if "长下影" in daily_patterns:
+                        detail_parts.append("长下影确认支撑")
+                elif has_bearish_pattern or vwap_status == "弱势":
+                    intention = "出货风险" if vwap_status == "弱势" else "假出货诱空"
+                    detail_parts.append("中段+价量背离")
+                    confidence = "中"
+                else:
+                    intention = "假出货诱空"
+                    detail_parts.append("中段+出货信号不清")
+                    confidence = "低"
             elif is_wash:
                 intention = "洗盘"
                 detail_parts.append("中段+缩量回调")
