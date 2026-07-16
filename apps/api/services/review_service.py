@@ -261,6 +261,69 @@ class ReviewService:
         }
 
     @staticmethod
+    def _detect_sequence(daily_klines: List[Dict]) -> List[str]:
+        """识别主力连续动作序列：涨停→洗盘、涨停→出货、连阳吸筹等"""
+        if len(daily_klines) < 6:
+            return []
+        recent = daily_klines[-6:]
+        seq = []
+
+        closes = [k["close"] for k in recent]
+        volumes = [k["volume"] for k in recent]
+        avg_vol = sum(volumes) / max(len(volumes), 1)
+
+        # 计算每日涨跌幅 + 是否涨停
+        gains = []
+        limit_up = [False] * len(recent)
+        for i in range(1, len(recent)):
+            prev = recent[i - 1]
+            cur = recent[i]
+            gain = (cur["close"] - prev["close"]) / max(prev["close"], 0.01)
+            gains.append(gain)
+            limit_up[i] = gain >= 0.095
+
+        # ── 涨停后序列 ──
+        limit_idx = [i for i in range(1, len(recent)) if limit_up[i]]
+        if limit_idx:
+            idx = limit_idx[-1]  # 最近一次涨停
+            days_after = len(recent) - 1 - idx
+            vol_after = sum(volumes[idx:]) / max(days_after, 1)
+            vol_ratio = vol_after / max(avg_vol, 1)
+
+            if days_after >= 1:
+                after_gains = gains[idx:]
+                avg_after_gain = sum(after_gains) / max(len(after_gains), 1)
+
+                if avg_after_gain < 0.005 and vol_ratio < 0.8:
+                    seq.append("涨停后缩量")
+                elif avg_after_gain < 0.005 and vol_ratio >= 1.2:
+                    seq.append("涨停后放量滞涨")
+                elif avg_after_gain > 0.02:
+                    seq.append("涨停后继续上攻")
+
+        # ── 连续阳线吸筹 ──
+        up_count = sum(1 for g in gains[-3:] if g > 0)
+        if up_count >= 2:
+            vol_increasing = all(volumes[-3 + i] < volumes[-2 + i] for i in range(2)) if len(volumes) >= 3 else False
+            if vol_increasing:
+                seq.append("量价齐升")
+
+        # ── 连阴缩量洗盘 ──
+        down_count = sum(1 for g in gains[-3:] if g < 0)
+        vol_shrink = all(volumes[-3 + i] >= volumes[-2 + i] for i in range(2)) if len(volumes) >= 3 else False
+        if down_count >= 2 and vol_shrink:
+            seq.append("连阴缩量")
+
+        # ── 高位放量滞涨 ──
+        if len(gains) >= 3:
+            recent_gains = gains[-3:]
+            recent_vols = volumes[-3:]
+            if abs(sum(recent_gains)) < 0.02 and max(recent_vols) > avg_vol * 1.5:
+                seq.append("高位放量滞涨")
+
+        return seq
+
+    @staticmethod
     def _detect_kline_pattern(daily_klines: List[Dict]) -> List[str]:
         """识别K线形态：长下影、W底、假破位、避雷针等"""
         if len(daily_klines) < 10:
@@ -314,6 +377,7 @@ class ReviewService:
         """
         vol_trend = ReviewService._analyze_daily_volume_trend(daily_klines)
         daily_patterns = ReviewService._detect_kline_pattern(daily_klines)
+        sequences = ReviewService._detect_sequence(daily_klines)
 
         intention = "震荡"
         detail_parts = []
@@ -322,12 +386,16 @@ class ReviewService:
         # ── Layer 1: 位置定大方向 ──
         if position == "低位":
             # Layer 2: 量能验证
-            if vol_trend["pattern"] == "吸筹量":
+            has_seq_accum = "量价齐升" in sequences
+            if vol_trend["pattern"] == "吸筹量" or has_seq_accum:
                 intention = "吸筹"
                 detail_parts.append("低位+上涨放量下跌缩量")
                 confidence = "中"
                 if vol_trend["has_volume_pile"]:
                     detail_parts.append("持续量堆")
+                    confidence = "高"
+                if has_seq_accum:
+                    detail_parts.append("量价齐升")
                     confidence = "高"
                 if "长下影" in daily_patterns or "W底" in daily_patterns:
                     detail_parts.append("底部形态")
@@ -341,20 +409,43 @@ class ReviewService:
             # Layer 2+4: 量能 + 盘口验证
             has_recovery_pattern = "假破位" in daily_patterns or "长下影" in daily_patterns
 
+            # 隔日验证：昨天大跌 + 今天企稳 → 假出货
+            yest_drop_recovery = False
+            if len(daily_klines) >= 3:
+                d2 = daily_klines[-3]  # 前天
+                d1 = daily_klines[-2]  # 昨天
+                d0 = daily_klines[-1]  # 今天
+                yest_drop = (d1["close"] - d2["close"]) / max(d2["close"], 0.01) < -0.02
+                today_recover = (d0["close"] - d1["close"]) / max(d1["close"], 0.01) > 0.01
+                yest_drop_recovery = yest_drop and today_recover
+
             is_wash = (
                 volume_signal in ("洗盘", "试盘")
                 and vwap_status != "弱势"
                 and tail_signal != "放量跳水"
             )
 
+            has_seq_wash = "涨停后缩量" in sequences or "连阴缩量" in sequences
+            has_seq_dist = "涨停后放量滞涨" in sequences or "高位放量滞涨" in sequences
+            has_seq_strong = "涨停后继续上攻" in sequences
+
             if volume_signal == "出货":
                 has_bearish_pattern = pattern in ("M头分时", "高开低走阴跌型", "早盘脉冲全天回落")
-                if has_recovery_pattern:
+                if has_recovery_pattern or yest_drop_recovery:
                     intention = "假出货诱空"
-                    detail_parts.append("中段+出货假象+形态修复")
-                    confidence = "高" if vwap_status != "弱势" else "中"
+                    parts = ["中段+出货假象"]
+                    if yest_drop_recovery:
+                        parts.append("昨大跌今企稳")
+                    if has_recovery_pattern:
+                        parts.append("形态修复")
+                    detail_parts.extend(parts)
+                    confidence = "高" if (vwap_status != "弱势" and yest_drop_recovery) else "中"
                     if "长下影" in daily_patterns:
                         detail_parts.append("长下影确认支撑")
+                elif has_seq_dist:
+                    intention = "出货风险"
+                    detail_parts.append("中段+连续放量滞涨")
+                    confidence = "中"
                 elif has_bearish_pattern or vwap_status == "弱势":
                     intention = "出货风险" if vwap_status == "弱势" else "假出货诱空"
                     detail_parts.append("中段+价量背离")
@@ -363,24 +454,33 @@ class ReviewService:
                     intention = "假出货诱空"
                     detail_parts.append("中段+出货信号不清")
                     confidence = "低"
-            elif is_wash:
+            elif is_wash or has_seq_wash:
                 intention = "洗盘"
                 detail_parts.append("中段+缩量回调")
                 confidence = "中"
+                if has_seq_wash:
+                    detail_parts.append(sequences[0] if sequences else "连续缩量")
+                    confidence = "高"
                 if vol_trend["pattern"] == "洗盘量" or vol_trend["down_shrink_ratio"] < 0.6:
                     detail_parts.append("量能萎缩主力惜售")
                     confidence = "高"
                 if vwap_status == "强势":
                     detail_parts.append("均价支撑")
                     confidence = "高"
+            elif has_seq_strong:
+                intention = "吸筹"
+                detail_parts.append("中段+涨停后继续上攻")
+                confidence = "高"
 
         elif position == "高位":
+            has_seq_high_dist = "高位放量滞涨" in sequences or "涨停后放量滞涨" in sequences
             is_real_dist = (
                 volume_signal == "出货"
                 or vwap_status == "弱势"
                 or pattern in ("M头分时", "高开低走阴跌型", "早盘脉冲全天回落")
                 or tail_signal == "放量跳水"
                 or "避雷针" in daily_patterns
+                or has_seq_high_dist
             )
             if is_real_dist:
                 intention = "真出货"
@@ -396,8 +496,20 @@ class ReviewService:
                 confidence = "低"
 
         # 无明确结论的兜底
-        if intention == "震荡" and position in ("低位", "中段"):
-            if vwap_status == "强势" and volume_signal != "出货":
+        if intention == "震荡":
+            if "量价齐升" in sequences:
+                intention = "吸筹"
+                detail_parts.append("量价齐升")
+                confidence = "中"
+            elif "涨停后继续上攻" in sequences:
+                intention = "吸筹"
+                detail_parts.append("涨停后继续上攻")
+                confidence = "高"
+            elif "连阴缩量" in sequences and position in ("低位", "中段"):
+                intention = "洗盘"
+                detail_parts.append("连阴缩量洗盘")
+                confidence = "中"
+            elif position in ("低位", "中段") and vwap_status == "强势" and volume_signal != "出货":
                 intention = "洗盘" if position == "中段" else "吸筹"
                 detail_parts.append(f"{position}+均线支撑")
                 confidence = "低"
