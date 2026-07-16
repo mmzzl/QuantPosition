@@ -363,9 +363,9 @@ class ReviewService:
         low_10 = min(lows[-10:])
         low_idx = lows[-10:].index(low_10) if len(lows) >= 10 else 0
         if 2 < low_idx < 8:
-            threshold = low_10 * 1.02
             before = lows[-10:-10 + low_idx]
             after = lows[-10 + low_idx + 1:]
+            threshold = low_10 * 1.03
             near_before = sum(1 for x in before if x <= threshold) if before else 0
             near_after = sum(1 for x in after if x <= threshold) if after else 0
             if near_before >= 1 and near_after >= 1:

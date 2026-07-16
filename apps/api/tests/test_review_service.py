@@ -5,11 +5,17 @@ import pytest
 from services.review_service import ReviewService
 
 
-def make_daily_kline(dates, closes):
-    return [
-        {"date": d, "open": c, "close": c, "high": c * 1.05, "low": c * 0.95, "volume": 100000}
-        for i, (d, c) in enumerate(zip(dates, closes))
-    ]
+def make_daily_kline(dates, closes, volumes=None):
+    vols = volumes if volumes else [100000] * len(closes)
+    klines = []
+    for i, (d, c) in enumerate(zip(dates, closes)):
+        open_p = closes[i - 1] if i > 0 else c
+        klines.append({
+            "date": d, "open": open_p, "close": c,
+            "high": max(open_p, c) * 1.02, "low": min(open_p, c) * 0.98,
+            "volume": vols[i] if i < len(vols) else 100000
+        })
+    return klines
 
 
 def make_bar(t, o, c, v):
@@ -171,3 +177,150 @@ class TestConclusion:
             tail_signal="\u65e0\u91cf\u6a2a\u76d8"
         )
         assert result["conclusion"] == "\u89c2\u671b"
+
+
+class TestDailyVolumeTrend:
+    def test_accumulation_volume_pattern(self):
+        klines = []
+        for i in range(20):
+            down = i % 2 == 0
+            vol = 30000 if down else 150000
+            if i in (7, 13):
+                vol = 350000
+            klines.append({
+                "date": f"2026-06-{i+1:02d}",
+                "open": 10.0 + i * 0.05 + (0.1 if down else 0),
+                "close": 10.0 + i * 0.05,
+                "high": 10.0 + i * 0.05 + 0.3,
+                "low": 10.0 + i * 0.05 - 0.1,
+                "volume": vol
+            })
+        result = ReviewService._analyze_daily_volume_trend(klines)
+        assert result["pattern"] == "\u5438\u7b79\u91cf"
+
+    def test_wash_volume_shrink_on_dips(self):
+        klines = []
+        for i in range(20):
+            vol = 100000 if i < 10 else (20000 + (i - 10) * 5000)
+            klines.append({
+                "date": f"2026-06-{i+1:02d}",
+                "open": 10.0 + i * 0.12,
+                "close": 10.0 + i * 0.12 - (0.1 if 10 <= i <= 12 else 0),
+                "high": 10.0 + i * 0.12 + 0.2,
+                "low": 10.0 + i * 0.12 - 0.2,
+                "volume": vol
+            })
+        result = ReviewService._analyze_daily_volume_trend(klines)
+        assert result["pattern"] == "\u6d17\u76d8\u91cf"
+
+    def test_distribution_volume_pattern(self):
+        klines = []
+        for i in range(20):
+            up = i % 2 == 0
+            klines.append({
+                "date": f"2026-06-{i+1:02d}",
+                "open": 15.0 - i * 0.08,
+                "close": 15.0 - i * 0.08 - (0.1 if up else 0),
+                "high": 15.0 - i * 0.08 + 0.1,
+                "low": 15.0 - i * 0.08 - 0.2,
+                "volume": 150000 if up else 30000
+            })
+        result = ReviewService._analyze_daily_volume_trend(klines)
+        assert result["pattern"] == "\u51fa\u8d27\u91cf"
+
+
+class TestDetectSequence:
+    def test_limit_up_then_shrink(self):
+        dates = [f"2026-07-{i+1:02d}" for i in range(6)]
+        closes = [10.0, 10.0, 10.5, 11.55, 11.60, 11.62]
+        vols = [100000] * 3 + [300000, 80000, 50000]
+        klines = make_daily_kline(dates, closes, vols)
+        seq = ReviewService._detect_sequence(klines)
+        assert "\u6da8\u505c\u540e\u7f29\u91cf" in seq
+
+    def test_limit_up_then_continuous_up(self):
+        dates = [f"2026-07-{i+1:02d}" for i in range(6)]
+        closes = [10.0, 10.0, 10.5, 11.55, 12.5, 13.2]
+        vols = [100000] * 3 + [300000, 250000, 250000]
+        klines = make_daily_kline(dates, closes, vols)
+        seq = ReviewService._detect_sequence(klines)
+        assert "\u6da8\u505c\u540e\u7ee7\u7eed\u4e0a\u653b" in seq
+
+    def test_consecutive_yin_shrink(self):
+        dates = [f"2026-07-{i+1:02d}" for i in range(6)]
+        closes = [12.0, 11.8, 11.6, 11.4, 11.35, 11.32]
+        vols = [100000, 80000, 60000, 45000, 40000, 38000]
+        klines = make_daily_kline(dates, closes, vols)
+        seq = ReviewService._detect_sequence(klines)
+        assert "\u8fde\u9634\u7f29\u91cf" in seq
+
+    def test_limit_up_volume_not_included_in_post_days(self):
+        dates = [f"2026-07-{i+1:02d}" for i in range(6)]
+        closes = [10.0, 10.0, 10.5, 11.55, 11.56, 11.55]
+        vols = [100000] * 3 + [500000, 30000, 20000]
+        klines = make_daily_kline(dates, closes, vols)
+        seq = ReviewService._detect_sequence(klines)
+        assert "\u6da8\u505c\u540e\u7f29\u91cf" in seq
+
+
+class TestKlinePatterns:
+    def test_hammer_candle(self):
+        dates = [f"2026-07-{i+1:02d}" for i in range(15)]
+        klines = make_daily_kline(dates, [10.0] * 15)
+        klines[-1] = {"date": "2026-07-15", "open": 10.0, "close": 9.95,
+                       "high": 10.05, "low": 9.5, "volume": 100000}
+        patterns = ReviewService._detect_kline_pattern(klines)
+        assert "\u957f\u4e0b\u5f71" in patterns
+
+    def test_w_double_bottom(self):
+        lows = [10.5, 10.3, 9.8, 9.7, 9.8, 10.0, 9.9, 9.8, 9.7, 9.9, 10.1, 10.2, 10.3, 10.4, 10.5]
+        closes = [10.6, 10.4, 9.9, 9.8, 9.9, 10.1, 10.0, 9.9, 9.8, 10.0, 10.2, 10.3, 10.4, 10.5, 10.6]
+        klines = []
+        for i in range(15):
+            klines.append({
+                "date": f"2026-07-{i+1:02d}",
+                "open": closes[i], "close": closes[i],
+                "high": closes[i] * 1.02, "low": lows[i],
+                "volume": 100000
+            })
+        patterns = ReviewService._detect_kline_pattern(klines)
+        assert "W\u5e95" in patterns
+
+
+class TestMainForceIntention:
+    def test_accumulation_low_position(self):
+        dates = [f"2026-06-{i+1:02d}" for i in range(20)]
+        closes = [10.0 + i * 0.08 for i in range(20)]
+        vols = [80000 if i % 2 == 0 else 30000 for i in range(20)]
+        klines = make_daily_kline(dates, closes, vols)
+        mf = ReviewService._assess_main_force_intention(
+            position="\u4f4e\u4f4d", daily_klines=klines,
+            vwap_status="\u5f3a\u52bf", volume_signal="\u6d17\u76d8",
+            pattern="U\u578b\u6d17\u76d8\u5206\u65f6", tail_signal="\u62a2\u7b79"
+        )
+        assert mf["intention"] in ("\u5438\u7b79",)
+
+    def test_distribution_high_position(self):
+        dates = [f"2026-06-{i+1:02d}" for i in range(20)]
+        closes = [10.0 * (1 + 0.04 * i) for i in range(20)]
+        klines = make_daily_kline(dates, closes)
+        mf = ReviewService._assess_main_force_intention(
+            position="\u9ad8\u4f4d", daily_klines=klines,
+            vwap_status="\u5f31\u52bf", volume_signal="\u51fa\u8d27",
+            pattern="M\u5934\u5206\u65f6", tail_signal="\u653e\u91cf\u8df3\u6c34"
+        )
+        assert mf["intention"] == "\u771f\u51fa\u8d27"
+
+    def test_fake_distribution_mid_recovery(self):
+        dates = [f"2026-07-{i+1:02d}" for i in range(15)]
+        closes = [10.0 + i * 0.2 for i in range(15)]
+        klines = make_daily_kline(dates, closes)
+        klines[-3] = {**klines[-3], "close": klines[-4]["close"] * 0.97, "low": klines[-4]["close"] * 0.94}
+        klines[-2] = {**klines[-2], "close": klines[-3]["close"] * 0.96, "low": klines[-3]["close"] * 0.94}
+        klines[-1] = {**klines[-1], "close": klines[-3]["close"] * 1.03}
+        mf = ReviewService._assess_main_force_intention(
+            position="\u4e2d\u6bb5", daily_klines=klines,
+            vwap_status="\u9707\u8361", volume_signal="\u51fa\u8d27",
+            pattern="\u65e9\u76d8\u8109\u51b2\u5168\u5929\u56de\u843d", tail_signal="\u65e0\u91cf\u6a2a\u76d8"
+        )
+        assert mf["intention"] == "\u5047\u51fa\u8d27\u8bf1\u7a7a"
