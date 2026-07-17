@@ -10,7 +10,6 @@ from systems.logs import Log
 from systems.single import ScriptSingle
 from systems.sys import home
 from services.review_service import ReviewService
-from services.stock_scorer import StockScorer
 
 
 def load_stocks(path: str) -> List[Dict[str, str]]:
@@ -34,16 +33,6 @@ def load_stocks(path: str) -> List[Dict[str, str]]:
     return stocks
 
 
-INTENTION_BONUS = {
-    "吸筹": 15,
-    "洗盘": 10,
-    "假出货诱空": 10,
-    "高位震荡": 0,
-    "出货风险": -999,
-    "真出货": -999,
-    "震荡": 0,
-}
-
 INTENTION_ICON = {
     "吸筹": "\U0001f4b0",
     "洗盘": "\U0001f300",
@@ -54,21 +43,11 @@ INTENTION_ICON = {
 
 
 def calc_score(r: Dict[str, Any]) -> float:
-    if "scorer_total" in r:
-        return r["scorer_total"]
     if r.get("conclusion") != "持有":
-        r["scorer_total"] = -1
         return -1
-    intention = r.get("main_force_intention", "")
-    bonus = INTENTION_BONUS.get(intention, 0)
-    if bonus < 0:
-        r["scorer_total"] = -1
+    if r.get("total_score", 0) <= 0:
         return -1
-    scorer = StockScorer()
-    result = scorer.score(r["code"], r["name"], r.get("date", date.today().strftime("%Y-%m-%d")))
-    r["scorer_total"] = result["total"] + bonus
-    r["intention_bonus"] = bonus
-    return r["scorer_total"]
+    return r["total_score"]
 
 
 def build_message(results: List[Dict]) -> str:
