@@ -119,6 +119,8 @@ class HeatmapSelectionService:
                 "volume": vol,
                 "amount": s.get("amount", 0),
                 "score": score,
+                "heatmap_score": score,
+                "grade": "S" if score >= 80 else "A" if score >= 60 else "B" if score >= 40 else "C",
                 "flags": flags,
                 "sector_rank": s.get("sector_rank", 0),
                 "sector_rank_pct": rank_pct
