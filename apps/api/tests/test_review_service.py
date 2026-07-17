@@ -2,6 +2,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pytest
+from unittest.mock import patch
 from services.review_service import ReviewService
 
 
@@ -324,3 +325,25 @@ class TestMainForceIntention:
             pattern="\u65e9\u76d8\u8109\u51b2\u5168\u5929\u56de\u843d", tail_signal="\u65e0\u91cf\u6a2a\u76d8"
         )
         assert mf["intention"] == "\u5047\u51fa\u8d27\u8bf1\u7a7a"
+
+
+class TestAnalyzeUnified:
+
+    @patch('database.get_db')
+    @patch('services.review_service.ReviewService._get_daily_klines')
+    @patch('services.review_service.ReviewService._get_5m_klines')
+    def test_analyze_returns_unified_dict(self, mock_get_5m, mock_get_daily, mock_get_db):
+        mock_get_daily.return_value = make_daily_kline(
+            [f"2026-07-{i+1:02d}" for i in range(20)],
+            [10.0 + i * 0.05 for i in range(20)]
+        )
+        mock_get_5m.return_value = [
+            make_bar("09:35", 10.0, 10.05, 10000),
+            make_bar("09:40", 10.05, 10.10, 15000),
+        ]
+        result = ReviewService.analyze("000001", "平安银行", "2026-07-17")
+
+        assert "dimensions" in result
+        assert "quantitative_score" in result
+        assert "total_score" in result
+        assert "grade" in result

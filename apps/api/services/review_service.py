@@ -1,6 +1,8 @@
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
+from services.stock_scorer import StockScorer
+
 
 class ReviewService:
 
@@ -576,7 +578,18 @@ class ReviewService:
         daily_klines = ReviewService._get_daily_klines(code)
         bars_5m = ReviewService._get_5m_klines(code, date_str)
         if not bars_5m:
-            return {"code": code, "name": name, "conclusion": "跳过", "reason": f"{date_str} 无 5 分钟 K 线数据"}
+            return StockScorer.unify(
+                {"code": code, "name": name, "date": date_str,
+                 "total": 0, "level": "C",
+                 "breakdown": {
+                     "price_volume": {"total": 0, "breakdown": {}},
+                     "fund_chip": {"total": 0, "breakdown": {}},
+                     "sector_theme": {"total": 0, "breakdown": {}},
+                     "risk": {"total": 0, "breakdown": {}},
+                 }},
+                conclusion="跳过",
+                strategy=f"{date_str} 无 5 分钟 K 线数据",
+            )
 
         position = ReviewService._determine_position(daily_klines)
         vwap_status, vwap = ReviewService._analyze_vwap(bars_5m)
@@ -601,22 +614,24 @@ class ReviewService:
             position, vwap_status, volume_signal, pattern, tail_signal, main_force
         )
 
-        return {
-            "code": code,
-            "name": name,
-            "date": date_str,
-            "position": position,
-            "vwap_status": vwap_status,
-            "volume_signal": volume_signal,
-            "volume_detail": vol_detail,
-            "pattern": pattern,
-            "tail_signal": tail_signal,
-            "conclusion": conclusion["conclusion"],
-            "reason": conclusion["reason"],
-            "strategy": conclusion["strategy"],
-            "main_force_intention": main_force["intention"],
-            "intention_detail": main_force["intention_detail"],
-            "intention_confidence": main_force["intention_confidence"],
-            "daily_vol_pattern": main_force["daily_vol_pattern"],
-            "daily_patterns": main_force["daily_patterns"],
+        scorer = StockScorer()
+        score_result = scorer.score(code, name, date_str)
+        intention_info = {
+            "intention": main_force["intention"],
+            "bonus": StockScorer.INTENTION_BONUS.get(main_force["intention"], 0),
+            "confidence": main_force["intention_confidence"],
+            "detail": main_force["intention_detail"],
         }
+        result = StockScorer.unify(
+            score_result, intention_info,
+            conclusion["conclusion"], conclusion["strategy"]
+        )
+        result["position"] = position
+        result["vwap_status"] = vwap_status
+        result["volume_signal"] = volume_signal
+        result["volume_detail"] = vol_detail
+        result["pattern"] = pattern
+        result["tail_signal"] = tail_signal
+        result["daily_vol_pattern"] = main_force["daily_vol_pattern"]
+        result["daily_patterns"] = main_force["daily_patterns"]
+        return result
