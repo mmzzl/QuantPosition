@@ -14,6 +14,15 @@ def _pure_code(code: str) -> str:
 class StockScorer:
     MODE_SHORT = "short"
     _industry_cache: Optional[Dict[str, str]] = None
+    INTENTION_BONUS = {
+        "吸筹": 15,
+        "洗盘": 10,
+        "假出货诱空": 10,
+        "高位震荡": 0,
+        "出货风险": -50,
+        "真出货": -999,
+        "震荡": 0,
+    }
 
     def __init__(self, db=None):
         self._db = db
@@ -134,4 +143,79 @@ class StockScorer:
                 "sector_theme": st,
                 "risk": rc,
             },
+        }
+
+    @staticmethod
+    def _calc_grade(total_score: int) -> str:
+        if total_score >= 80:
+            return "S"
+        elif total_score >= 60:
+            return "A"
+        elif total_score >= 40:
+            return "B"
+        else:
+            return "C"
+
+    @staticmethod
+    def _build_dimensions(breakdown: dict) -> dict:
+        max_map = {
+            "price_volume": 40,
+            "fund_chip": 13,
+            "sector_theme": 20,
+            "risk": 5,
+        }
+        result = {}
+        for key, value in breakdown.items():
+            result[key] = {
+                "score": value["total"],
+                "max": max_map.get(key, 0),
+                "detail": value["breakdown"],
+            }
+        return result
+
+    @classmethod
+    def unify(cls, score_result: dict,
+              intention_info: Optional[dict] = None,
+              conclusion: str = "观望",
+              strategy: str = "") -> dict:
+        if intention_info is None:
+            intention_info = {}
+
+        code = score_result["code"]
+        name = score_result["name"]
+        date_str = score_result["date"]
+        quantitative = score_result["total"]
+        quantitative_level = score_result["level"]
+
+        intention = intention_info.get("intention", "")
+        bonus = intention_info.get("bonus", 0)
+        confidence = intention_info.get("confidence", "")
+        detail = intention_info.get("detail", "")
+
+        bonus_clamped = max(bonus, 0)
+        total_score = min(100, max(0, quantitative + bonus_clamped))
+
+        if intention == "真出货":
+            total_score = 0
+            grade = "C"
+        else:
+            grade = cls._calc_grade(total_score)
+
+        dimensions = cls._build_dimensions(score_result["breakdown"])
+
+        return {
+            "code": code,
+            "name": name,
+            "date": date_str,
+            "dimensions": dimensions,
+            "quantitative_score": quantitative,
+            "quantitative_level": quantitative_level,
+            "main_force_intention": intention,
+            "intention_bonus": bonus,
+            "intention_confidence": confidence,
+            "intention_detail": detail,
+            "conclusion": conclusion,
+            "strategy": strategy,
+            "total_score": total_score,
+            "grade": grade,
         }
