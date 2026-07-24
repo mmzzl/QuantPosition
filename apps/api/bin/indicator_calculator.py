@@ -8,8 +8,10 @@
 import sys
 import os
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from typing import List, Tuple
 
 import pandas as pd
 
@@ -159,6 +161,41 @@ def compute_stock_indicators(klines):
         }
 
     return results
+
+
+class IndicatorCalculator:
+    """技术指标计算器
+    支持单股计算、批量增量更新和全量回填。
+    """
+    def __init__(self, db=None):
+        self.db = db or get_db()
+
+    def calculate(self, code: str, klines: List[dict]) -> dict:
+        return compute_stock_indicators(klines)
+
+    def backfill(self, codes: List[str] = None, chunk_size: int = 200) -> Tuple[int, int]:
+        if codes is None:
+            codes = self.db.stock_kline.distinct("code", {"frequency": 9})
+        total = len(codes)
+        logger.info("回填指标: 共 %d 只股票", total)
+        total_updated = 0
+        total_errors = 0
+        t_start = time.time()
+        for i in range(0, total, chunk_size):
+            chunk = codes[i:i + chunk_size]
+            updated, errors = update_stock_indicators(self.db, chunk, backfill=True)
+            total_updated += updated
+            total_errors += errors
+            elapsed = time.time() - t_start
+            done = min(i + chunk_size, total)
+            rate = done / elapsed if elapsed > 0 else 0
+            eta = (total - done) / rate if rate > 0 else 0
+            logger.info("回填 [%d/%d] 更新%d 错误%d | %.1f只/秒 预计剩余%.0f秒",
+                         done, total, total_updated, total_errors, rate, eta)
+            sys.stdout.flush()
+        logger.info("回填完成: 更新 %d 只, 错误 %d 只, 耗时 %.0f 秒",
+                     total_updated, total_errors, time.time() - t_start)
+        return total_updated, total_errors
 
 
 def get_codes_with_klines_today(db, today_str):

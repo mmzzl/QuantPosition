@@ -1,10 +1,12 @@
 import pandas as pd
 import logging
 import random
+import statistics
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 from database import get_db
 from services.stock_scorer import StockScorer
+from services import task_progress
 
 
 _name_map_cache = None
@@ -129,6 +131,76 @@ def _build_ctx(indicators, code, name, has_pos, cost, buy_date, today):
     }, {"has_pos": has_pos, "cost": cost, "buy_date": buy_date, "today": today})
 
 
+def calculate_metrics(
+    equity_curve: List[float],
+    trades: List[dict],
+    initial_cash: float,
+    risk_free_rate: float = 0.0,
+) -> Dict[str, Any]:
+    if len(equity_curve) < 2 or not trades:
+        return {
+            "annual_return": 0.0,
+            "sharpe_ratio": 0.0,
+            "max_drawdown": 0.0,
+            "win_rate": 0.0,
+            "total_return": 0.0,
+            "total_trades": len(trades),
+            "avg_hold_days": None,
+        }
+
+    final_value = equity_curve[-1]
+    total_return = (final_value - initial_cash) / initial_cash * 100
+
+    daily_returns = []
+    for i in range(1, len(equity_curve)):
+        if equity_curve[i - 1] > 0:
+            daily_returns.append((equity_curve[i] - equity_curve[i - 1]) / equity_curve[i - 1])
+
+    if not daily_returns:
+        return {
+            "annual_return": 0.0,
+            "sharpe_ratio": 0.0,
+            "max_drawdown": 0.0,
+            "win_rate": 0.0,
+            "total_return": round(total_return, 2),
+            "total_trades": len(trades),
+            "avg_hold_days": None,
+        }
+
+    n_days = len(equity_curve) - 1
+    cagr = ((final_value / initial_cash) ** (252.0 / n_days) - 1) * 100 if n_days > 0 else 0.0
+
+    avg_ret = statistics.mean(daily_returns)
+    std_ret = statistics.stdev(daily_returns) if len(daily_returns) > 1 else 0.0
+    daily_rf = risk_free_rate / 252.0
+    sharpe = ((avg_ret - daily_rf) / std_ret * (252 ** 0.5)) if std_ret > 0 else 0.0
+
+    peak = equity_curve[0]
+    max_dd = 0.0
+    for v in equity_curve:
+        if v > peak:
+            peak = v
+        dd = (peak - v) / peak * 100
+        if dd > max_dd:
+            max_dd = dd
+
+    wins = sum(1 for t in trades if t.get("pnl_pct", 0) > 0)
+    win_rate = wins / len(trades) * 100 if trades else 0.0
+
+    hold_days_list = [t.get("hold_days", 0) for t in trades]
+    avg_hold = statistics.mean(hold_days_list) if hold_days_list else None
+
+    return {
+        "annual_return": round(cagr, 2),
+        "sharpe_ratio": round(sharpe, 2),
+        "max_drawdown": round(max_dd, 2),
+        "win_rate": round(win_rate, 1),
+        "total_return": round(total_return, 2),
+        "total_trades": len(trades),
+        "avg_hold_days": round(avg_hold, 1) if avg_hold else None,
+    }
+
+
 def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=None, end_date=None,
                  initial_cash=100000, commission=0.001, custom_rules=None, max_stocks=0,
                  celery_task=None, task_id=None, max_positions=5,
@@ -202,6 +274,9 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
     start_ts = pd.Timestamp(start_date).strftime("%Y-%m-%d")
 
     logging.info(f"[BACKTEST] 开始回测, 共 {total_bars} 天")
+
+    equity_curve = []
+    equity_dates = []
 
     for date_str in dates:
         bar_count += 1
@@ -337,6 +412,15 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
             }
             remaining_slots -= 1
 
+        # ---- 记录每日净值 ----
+        net_value = cash
+        for code, pos in positions.items():
+            ind = data.get(code, {}).get(date_str)
+            if ind and ind.get("close", 0) > 0:
+                net_value += pos["shares"] * ind["close"]
+        equity_curve.append(net_value)
+        equity_dates.append(date_str)
+
     # ==== 回测结束：强制平仓 ====
     end_today = pd.Timestamp(end_date).date()
     for code, pos in list(positions.items()):
@@ -374,29 +458,17 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
 
     # ==== 统计 ====
     all_trades = trade_log
-    if not all_trades:
-        logging.info(f"[BACKTEST] 未产生任何交易")
-        return {
-            "strategy": strategy_name, "trades": 0,
-            "processed": len(data), "skipped": 0,
-            "rules": [r.get("name", "") for r in rules],
-        }
-
-    import statistics
-
-    pnls = [t["pnl_pct"] for t in all_trades]
-    wins = [p for p in pnls if p > 0]
-    losses = [p for p in pnls if p < 0]
-
-    portfolio_return = round((cash - initial_cash) / initial_cash * 100, 2)
     unique_codes = len(set(t["code"] for t in all_trades))
+
+    metrics = calculate_metrics(equity_curve, all_trades, initial_cash)
 
     exit_stats = {}
     for t in all_trades:
         exit_stats[t["reason"]] = exit_stats.get(t["reason"], 0) + 1
 
-    sharpe = round(statistics.mean(pnls) / statistics.stdev(pnls) * (252 ** 0.5), 2) \
-        if len(pnls) > 1 and statistics.stdev(pnls) > 0 else 0
+    pnls = [t["pnl_pct"] for t in all_trades] if all_trades else []
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p < 0]
 
     result = {
         "strategy": strategy_name,
@@ -404,22 +476,27 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
         "processed": len(data),
         "skipped": len(filtered) - len(data) if len(filtered) > len(data) else 0,
         "unique_stocks": unique_codes,
-        "portfolio_return": portfolio_return,
-        "win_rate": round(len(wins) / len(pnls) * 100, 1) if pnls else 0,
+        "portfolio_return": metrics["total_return"],
+        "win_rate": metrics["win_rate"],
         "avg_return": round(sum(pnls) / len(pnls), 2) if pnls else 0,
-        "total_return": round(sum(pnls), 2),
-        "best": round(max(pnls), 2),
-        "worst": round(min(pnls), 2),
+        "total_return": metrics["total_return"],
+        "best": round(max(pnls), 2) if pnls else 0,
+        "worst": round(min(pnls), 2) if pnls else 0,
         "avg_win": round(sum(wins) / len(wins), 2) if wins else 0,
         "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
         "profit_factor": round(abs(sum(wins) / sum(losses)), 2) if losses and sum(losses) != 0 else float('inf'),
-        "sharpe": sharpe,
+        "sharpe": metrics["sharpe_ratio"],
         "exit_stats": exit_stats,
         "trades_list": all_trades,
         "rules": [r.get("name", "") for r in rules],
+        "equity_curve": [round(v, 2) for v in equity_curve],
+        "equity_dates": equity_dates,
+        "metrics": metrics,
     }
 
-    logging.info(f"[RESULT] 组合收益={portfolio_return}% trades={len(all_trades)} win_rate={result['win_rate']}% sharpe={sharpe}")
+    logging.info(f"[RESULT] 组合收益={metrics['total_return']}% trades={len(all_trades)} "
+                 f"win_rate={metrics['win_rate']}% sharpe={metrics['sharpe_ratio']} "
+                 f"annual_return={metrics['annual_return']}% max_dd={metrics['max_drawdown']}%")
 
     if task_id:
         _update_progress(task_id, total_bars, total_bars, "回测完成",
@@ -430,7 +507,8 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
 
 def _update_progress(task_id, current, total, status, detail="", result=None):
     try:
-        doc = {"current": current, "total": total, "status": status, "detail": detail, "updated_at": datetime.now()}
+        task_progress.update_progress(task_id, current, total, status, detail)
+        doc = {"updated_at": datetime.now()}
         if result is not None:
             doc["result"] = result
         db = get_db()

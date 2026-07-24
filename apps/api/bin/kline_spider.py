@@ -6,11 +6,10 @@ import traceback
 import requests
 import pandas as pd
 import logging
-import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
+from threading import Lock, Semaphore
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pymongo import UpdateOne
 
 from systems.logs import Log
@@ -20,32 +19,15 @@ from database import get_db
 
 
 TENCENT_MAX = 320
-
-
 TODAY_FLAG = " 15:00"
+MAX_RETRIES = 3
+RETRY_BACKOFF = 2.0
+RATE_LIMIT_PER_SEC = 5
+SINA_BATCH_SIZE = 80
+GAP_THRESHOLD_DAYS = 3
 
 
-def _tencent_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict]]:
-    market = "bj" if code.startswith("8") else ("sh" if code.startswith(("6", "5")) else "sz")
-    try:
-        r = requests.get(
-            "https://ifzq.gtimg.cn/appstock/app/fqkline/get",
-            params={"param": f"{market}{code},day,,,{count},qfq"},
-            timeout=10,
-        )
-        d = r.json()
-    except Exception as e:
-        logging.error(f"tencent HTTP error for {code}: {e}")
-        return None
-
-    if not (d.get("data")):
-        return []
-
-    data = list(d["data"].values())[0]
-    bars = data.get("qfqday") or data.get("day")
-    if not bars or not isinstance(bars, list):
-        return []
-
+def _parse_api_response(code: str, bars: List, source: str = "tencent") -> List[Dict[str, Any]]:
     records = []
     for bar in bars:
         if not isinstance(bar, (list, tuple)) or len(bar) < 6:
@@ -69,14 +51,96 @@ def _tencent_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict]]:
             "amount": 0.0,
             "frequency": 9,
             "adjust": "qfq",
+            "source": source,
             "crawl_time": datetime.now().isoformat(),
         })
     return records
 
 
+def _tencent_kline(code: str, count: int = TENCENT_MAX, retries: int = MAX_RETRIES) -> Optional[List[Dict]]:
+    market = "bj" if code.startswith("8") else ("sh" if code.startswith(("6", "5")) else "sz")
+    url = "https://ifzq.gtimg.cn/appstock/app/fqkline/get"
+    params = {"param": f"{market}{code},day,,,{count},qfq"}
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            r = requests.get(url, params=params, timeout=10)
+            r.raise_for_status()
+            d = r.json()
+            if not (d.get("data")):
+                return []
+            data = list(d["data"].values())[0]
+            bars = data.get("qfqday") or data.get("day")
+            if not bars or not isinstance(bars, list):
+                return []
+            records = _parse_api_response(code, bars, source="tencent")
+            if attempt > 1:
+                logging.info(f"tencent {code}: retry {attempt} succeeded, {len(records)} bars")
+            return records
+        except Exception as e:
+            last_exc = e
+            if attempt < retries:
+                backoff = RETRY_BACKOFF * (2 ** (attempt - 1))
+                logging.warning(f"tencent {code}: attempt {attempt}/{retries} failed ({e}), retry in {backoff:.1f}s")
+                time.sleep(backoff)
+    logging.error(f"tencent {code}: all {retries} attempts failed, last error: {last_exc}")
+    return None
+
+
+def _sina_kline(code: str, count: int = 200) -> Optional[List[Dict]]:
+    market_code = f"sh{code}" if code.startswith(("6", "5")) else f"sz{code}"
+    url = f"https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
+    params = {"symbol": market_code, "scale": "240", "ma": "no", "datalen": count}
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        raw = r.json()
+        if not isinstance(raw, list) or not raw:
+            logging.debug(f"sina {code}: empty response")
+            return []
+        records = []
+        for bar in raw:
+            try:
+                date_str = str(bar.get("day", "")).strip()
+                if not date_str:
+                    continue
+                o, c, h, l = float(bar["open"]), float(bar["close"]), float(bar["high"]), float(bar["low"])
+                v = int(float(bar["volume"])) if bar.get("volume") and bar["volume"] != "0" else 0
+            except (ValueError, TypeError, KeyError):
+                continue
+            records.append({
+                "code": code,
+                "date": f"{date_str}{TODAY_FLAG}",
+                "open": o,
+                "high": h,
+                "low": l,
+                "close": c,
+                "volume": v,
+                "amount": 0.0,
+                "frequency": 9,
+                "adjust": "qfq",
+                "source": "sina",
+                "crawl_time": datetime.now().isoformat(),
+            })
+        return records
+    except Exception as e:
+        logging.warning(f"sina {code}: HTTP error: {e}")
+        return None
+
+
+def _multi_source_kline(code: str, count: int = TENCENT_MAX) -> Optional[List[Dict]]:
+    primary = _tencent_kline(code, count=count)
+    if primary is not None:
+        return primary
+    logging.warning(f"tencent {code}: failed, falling back to sina")
+    return _sina_kline(code, count=count)
+
+
 class StockKlineScraper:
-    def __init__(self):
+    def __init__(self, rate_limit: float = RATE_LIMIT_PER_SEC):
         self.storage = get_db()["stock_kline"]
+        self._rate_limit = rate_limit
+        self._semaphore = None
 
     @staticmethod
     def _cutoff_date() -> str:
@@ -115,20 +179,53 @@ class StockKlineScraper:
             raise
         return sorted(list(codes))
 
+    def _check_data_gaps(self, code: str):
+        try:
+            stored = list(self.storage.find(
+                {"code": code, "frequency": 9},
+                {"date": 1},
+                sort=[("date", 1)]
+            ))
+            if not stored or len(stored) < 2:
+                return
+            dates = [doc["date"][:10] for doc in stored]
+            for i in range(1, len(dates)):
+                d1 = datetime.strptime(dates[i - 1], "%Y-%m-%d")
+                d2 = datetime.strptime(dates[i], "%Y-%m-%d")
+                gap = (d2 - d1).days
+                if gap > GAP_THRESHOLD_DAYS:
+                    logging.warning(f"data gap for {code}: {dates[i - 1]} → {dates[i]} ({gap} days)")
+        except Exception as e:
+            logging.debug(f"gap check skipped for {code}: {e}")
+
     def _fetch_kline(self, code: str) -> List[Dict[str, Any]]:
-        records = _tencent_kline(code)
-        if records is None:
-            return None
+        if self._semaphore:
+            self._semaphore.acquire()
+        try:
+            records = _multi_source_kline(code)
+            if records is None:
+                return None
 
-        cutoff = self._cutoff_date()
-        records = [r for r in records if r["date"][:10] <= cutoff]
+            cutoff = self._cutoff_date()
+            records = [r for r in records if r["date"][:10] <= cutoff]
 
-        latest = self._get_latest_bar_time(code, 9)
-        if latest:
-            records = [r for r in records if r["date"] > latest]
+            latest = self._get_latest_bar_time(code, 9)
+            if latest:
+                records = [r for r in records if r["date"] > latest]
 
-        logging.debug(f"tencent {code}: {len(records)} new bars (cutoff={cutoff})")
-        return records
+            logging.debug(f"multi_source {code}: {len(records)} new bars (cutoff={cutoff})")
+            if len(records) > 1:
+                code_obj = code
+                dates = [r["date"][:10] for r in records]
+                for j in range(1, len(dates)):
+                    gap = (datetime.strptime(dates[j], "%Y-%m-%d") -
+                           datetime.strptime(dates[j - 1], "%Y-%m-%d")).days
+                    if gap > GAP_THRESHOLD_DAYS:
+                        logging.warning(f"fetch gap for {code}: {dates[j - 1]} → {dates[j]} ({gap} days)")
+            return records
+        finally:
+            if self._semaphore:
+                self._semaphore.release()
 
     def save_klines(self, records: List[Dict[str, Any]]):
         if not records:
@@ -149,20 +246,75 @@ class StockKlineScraper:
         except Exception as e:
             logging.error(f"Failed to save {len(records)} klines: {e}")
 
-    def fetch_daily_klines(self, codes: List[str] = None):
+    def fetch_stock(self, code: str) -> Optional[List[Dict[str, Any]]]:
+        pure = code.split(".")[-1] if "." in code else code
+        records = _multi_source_kline(pure)
+        if records is None:
+            logging.warning(f"fetch_stock {code}: no data from any source")
+            return None
+        cutoff = self._cutoff_date()
+        return [r for r in records if r["date"][:10] <= cutoff]
+
+    def batch_update(self, codes: List[str] = None) -> int:
         if codes is None:
             codes = self._get_all_stock_codes()
-
+        codes = [c.split(".")[-1] if "." in c else c for c in codes]
         total = len(codes)
         workers = 10
+        self._semaphore = Semaphore(self._rate_limit)
         results = {"success": 0, "skipped": 0, "failed": 0}
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(self._fetch_kline, code.split(".")[-1]): code
-                for code in codes
-            }
+            futures = {executor.submit(self._fetch_kline, code): code for code in codes}
+            pending = []
+            pending_lock = Lock()
+            for i, future in enumerate(as_completed(futures)):
+                code = futures[future]
+                try:
+                    records = future.result()
+                    if records is None:
+                        results["failed"] += 1
+                    elif not records:
+                        results["skipped"] += 1
+                    else:
+                        with pending_lock:
+                            pending.extend(records)
+                        results["success"] += 1
+                except Exception as e:
+                    logging.error(f"Error processing {code}: {e}")
+                    results["failed"] += 1
 
+                if len(pending) >= 2000:
+                    with pending_lock:
+                        self.save_klines(pending)
+                        pending = []
+
+                if (i + 1) % 500 == 0:
+                    logging.info(
+                        f"Progress: {i + 1}/{total}, "
+                        f'success={results["success"]}, skipped={results["skipped"]}, failed={results["failed"]}'
+                    )
+
+        with pending_lock:
+            if pending:
+                self.save_klines(pending)
+
+        logging.info(
+            f"batch_update completed: total={total}, "
+            f'success={results["success"]}, skipped={results["skipped"]}, failed={results["failed"]}'
+        )
+        return results["success"]
+
+    def fetch_daily_klines(self, codes: List[str] = None):
+        codes = codes or self._get_all_stock_codes()
+        codes = [c.split(".")[-1] if "." in c else c for c in codes]
+        total = len(codes)
+        workers = 10
+        self._semaphore = Semaphore(self._rate_limit)
+        results = {"success": 0, "skipped": 0, "failed": 0}
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(self._fetch_kline, code): code for code in codes}
             pending = []
             pending_lock = Lock()
             for i, future in enumerate(as_completed(futures)):

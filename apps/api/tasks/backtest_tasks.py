@@ -18,7 +18,7 @@ def _save(strategy: str, data: dict):
         logging.warning(f"保存回测结果失败: {e}")
 
 
-@celery_app.task(bind=True, name="tasks.backtest.run_simple")
+@celery_app.task(bind=True, name="tasks.backtest.run_simple_backtest")
 def run_simple_backtest(
     self,
     strategy: str = "portfolio_rule_engine",

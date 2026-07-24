@@ -126,9 +126,52 @@ def main():
     logging.info(f"Scored {len(scored)} stocks, top 5: {[(r['code'], int(s)) for s, r in scored[:5]]}")
 
     title, content = build_message(results)
-    from bin.rule_engine import send_dingtalk_message
+    from services.notification_service import send_dingtalk_message
     send_dingtalk_message(title, content)
     logging.info(f"DingTalk pushed: {title}")
+
+
+
+def run(date_str: str = None) -> list:
+    Log("review_picker", log_type=Log.TYPE_FILE, level=logging.INFO)
+    path = os.path.join(home(), "apps", "api", "data", "all_stock.csv")
+    stocks = load_stocks(path)
+    if not stocks:
+        return []
+
+    today_str = date_str or date.today().strftime("%Y-%m-%d")
+    results = []
+    results_lock = Lock()
+    total = len(stocks)
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        futures = {executor.submit(ReviewService.analyze, stk["code"], stk["name"], today_str): stk for stk in stocks}
+        for i, future in enumerate(as_completed(futures)):
+            stk = futures[future]
+            try:
+                r = future.result()
+                with results_lock:
+                    results.append(r)
+            except Exception:
+                pass
+
+    scored = sorted(
+        [(calc_score(r), r) for r in results],
+        key=lambda x: x[0], reverse=True
+    )
+    scored = [{"code": r["code"], "name": r["name"], "score": s,
+               "conclusion": r.get("conclusion", ""),
+               "pattern": r.get("pattern", ""),
+               "intention": r.get("main_force_intention", ""),
+               "reason": r.get("intention_detail", ""),
+               "strategy": r.get("strategy", "")}
+              for s, r in scored if s >= 0]
+
+    if scored:
+        title, content = build_message(results)
+        from services.notification_service import send_dingtalk_message
+        send_dingtalk_message(title, content)
+
+    return scored
 
 
 if __name__ == "__main__":

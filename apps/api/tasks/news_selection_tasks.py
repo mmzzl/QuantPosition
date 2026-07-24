@@ -5,7 +5,7 @@ from celery_config import celery_app
 from database import get_db
 
 
-@celery_app.task(bind=True, name="tasks.news_selection.run")
+@celery_app.task(bind=True, name="tasks.news_selection.run_news_selection")
 def run_news_selection(self):
     """新闻选股 Celery 任务：扫描新闻→提取 BK→查股票→计算价格→缓存结果"""
     try:

@@ -3,16 +3,10 @@ import json
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import hashlib
-import hmac
-import base64
-import time
 import socket
 import logging
-import requests
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
-from urllib.parse import urlparse, quote
 from systems.logs import Log
 
 logger = logging.getLogger(__name__)
@@ -23,51 +17,7 @@ from services.stock_scorer import StockScorer
 
 
 
-def send_dingtalk_message(title: str, content: str):
-    """发送钉钉消息"""
-    try:
-        import sys
-        sys.path.insert(0, os.path.dirname(__file__))
-        from database import get_db
-        db = get_db()
-        settings = db.system_settings.find_one({"_id": "global"})
-        webhook = (settings or {}).get("dingtalk_webhook", "")
-        secret = (settings or {}).get("dingtalk_secret", "")
-
-        if not webhook:
-            logging.warning("钉钉 webhook 未配置")
-            return False
-
-        logging.info(f"钉钉 webhook URL: {webhook[:60]}... (长度: {len(webhook)})")
-
-        timestamp = str(round(time.time() * 1000))
-        if secret:
-            sign_str = f"{timestamp}\n{secret}"
-            sign = base64.b64encode(
-                hmac.new(secret.encode("utf-8"), sign_str.encode("utf-8"), hashlib.sha256).digest()
-            ).decode("utf-8")
-            webhook += f"&timestamp={timestamp}&sign={quote(sign)}"
-
-        payload = {
-            "msgtype": "markdown",
-            "markdown": {
-                "title": title,
-                "text": f"## {title}\n\n{content}"
-            }
-        }
-        import json as _json
-        body_size = len(_json.dumps(payload, ensure_ascii=False).encode("utf-8"))
-        logging.info(f"钉钉推送 payload 大小: {body_size} bytes")
-        if body_size > 19000:
-            logging.warning(f"payload 过大 ({body_size} bytes)，截断内容")
-            payload["markdown"]["text"] = payload["markdown"]["text"][:18000] + "\n\n...(内容过长已截断)"
-        resp = requests.post(webhook, json=payload, timeout=5)
-        result = resp.json()
-        logging.info(f"钉钉推送结果: {result}")
-        return result.get("errcode") == 0
-    except Exception as e:
-        logging.error(f"钉钉推送失败: {e}")
-        return False
+from services.notification_service import send_dingtalk_message
 
 
 class StockRuleEngine:

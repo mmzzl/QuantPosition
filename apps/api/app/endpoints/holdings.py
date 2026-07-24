@@ -7,6 +7,7 @@ from app.core.auth import AuthenticatedUser, get_current_user
 from models.holding import HoldingCreate, HoldingUpdate, SellRequest, ExitRuleRequest, HoldingResponse
 from services.holding_service import HoldingService
 from services.transaction_service import TransactionService
+from services.portfolio_service import PortfolioService
 from database import get_db
 from models.user import User
 from utils.stock_api import SinaStockAPI, get_stock_price
@@ -42,23 +43,7 @@ async def get_stock_prices(
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
     """批量获取股票实时价格"""
-    prices = {}
-    for code in request.codes:
-        try:
-            info = SinaStockAPI.get_stock_info(code)
-            if info:
-                prices[code] = {
-                    "price": info.get("price"),
-                    "name": info.get("name"),
-                    "open": info.get("open"),
-                    "high": info.get("high"),
-                    "low": info.get("low"),
-                    "volume": info.get("volume"),
-                    "amount": info.get("amount")
-                }
-        except Exception:
-            pass
-    return {"prices": prices}
+    return PortfolioService.batch_prices(request.codes)
 
 
 @router.post("/{user_id}", status_code=status.HTTP_201_CREATED)
@@ -248,15 +233,14 @@ async def get_pnl(
     user_id: str,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
-    """获取已实现盈亏"""
+    """获取已实现盈亏和未实现盈亏"""
     if current_user.user_id != user_id and not _is_admin(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="无权限访问"
         )
 
-    realized_pnl = TransactionService.get_realized_pnl(user_id)
-    return {"realized_pnl": realized_pnl}
+    return PortfolioService.get_pnl(user_id)
 
 
 @router.get("/pnl/admin")
@@ -285,32 +269,7 @@ async def get_portfolio(
             detail="无权限访问"
         )
 
-    holdings_data = HoldingService.get_holdings(user_id, page=1, page_size=10000)
-    
-    # 为组合汇总获取实时价格
-    for h in holdings_data["items"]:
-        current_price = get_stock_price(h["code"])
-        h["current_price"] = current_price
-        h["market_value"] = current_price * h["quantity"] if current_price else 0
-        h["unrealized_pnl"] = (current_price - h["average_cost"]) * h["quantity"] if current_price else 0
-
-    holdings_count = len(holdings_data["items"])
-    total_cost = sum(h["quantity"] * h["average_cost"] for h in holdings_data["items"])
-    market_value = sum(h.get("market_value", 0) or 0 for h in holdings_data["items"])
-    unrealized_pnl = sum(h.get("unrealized_pnl", 0) or 0 for h in holdings_data["items"])
-
-    profit_rate = (unrealized_pnl / total_cost * 100) if total_cost > 0 else 0
-    realized_pnl = TransactionService.get_realized_pnl(user_id)
-
-    return {
-        "holdings_count": holdings_count,
-        "total_cost": round(total_cost, 2),
-        "market_value": round(market_value, 2),
-        "unrealized_pnl": round(unrealized_pnl, 2),
-        "profit_rate": round(profit_rate, 2),
-        "realized_pnl": realized_pnl,
-        "holdings": holdings_data["items"]
-    }
+    return PortfolioService.get_portfolio(user_id)
 
 
 # ===== 板块集中度 =====
@@ -324,41 +283,7 @@ async def get_sector_exposure(
     if current_user.user_id != user_id and not _is_admin(current_user):
         raise HTTPException(status_code=403, detail="无权限访问")
 
-    db = get_db()
-    holdings_list = list(db.holdings.find({"user_id": user_id}))
-    if not holdings_list:
-        return {"sectors": [], "holdings_count": 0}
-
-    codes = [h["code"] for h in holdings_list]
-    sectors = list(db.sector_stocks.find({"stock_code": {"$in": codes}}))
-    sector_map = {s["stock_code"]: s.get("sector_name", "其他") for s in sectors}
-
-    sector_total = {}
-    sector_holdings = {}
-    for h in holdings_list:
-        code = h["code"]
-        sec = sector_map.get(code, "其他")
-        cost = h["quantity"] * h["average_cost"]
-        sector_total[sec] = sector_total.get(sec, 0) + cost
-        sector_holdings.setdefault(sec, []).append({
-            "code": code,
-            "name": h.get("name", ""),
-            "cost": round(cost, 2),
-        })
-
-    total_cost = sum(sector_total.values()) or 1
-    sector_list = [
-        {
-            "sector": sec,
-            "cost": round(cost, 2),
-            "pct": round(cost / total_cost * 100, 1),
-            "stock_count": len(sector_holdings[sec]),
-            "stocks": sector_holdings[sec],
-        }
-        for sec, cost in sorted(sector_total.items(), key=lambda x: -x[1])
-    ]
-
-    return {"sectors": sector_list, "holdings_count": len(holdings_list)}
+    return PortfolioService.get_sector_exposure(user_id)
 
 
 @router.get("/{user_id}/correlation")
@@ -370,58 +295,7 @@ async def get_correlation(
     if current_user.user_id != user_id and not _is_admin(current_user):
         raise HTTPException(status_code=403, detail="无权限访问")
 
-    import statistics
-
-    db = get_db()
-    holdings_list = list(db.holdings.find({"user_id": user_id}))
-    if len(holdings_list) < 2:
-        return {"error": "至少需要2只持仓股票"}
-
-    codes = [h["code"] for h in holdings_list]
-    names = {h["code"]: h.get("name", "") for h in holdings_list}
-
-    min_bars = None
-    all_returns = {}
-    for h in holdings_list:
-        klines = list(db.stock_kline.find(
-            {"code": h["code"], "frequency": 9},
-            sort=[("date", -1)],
-            limit=60,
-        ))
-        if len(klines) < 10:
-            continue
-        klines.reverse()
-        prices = [k["close"] for k in klines]
-        returns = []
-        for i in range(1, len(prices)):
-            ret = (prices[i] - prices[i - 1]) / prices[i - 1]
-            returns.append(ret)
-        all_returns[h["code"]] = returns
-        if min_bars is None or len(returns) < min_bars:
-            min_bars = len(returns)
-
-    if not all_returns or len(all_returns) < 2:
-        return {"error": "K线数据不足"}
-
-    codes_with_data = list(all_returns.keys())
-
-    def pearson(x, y):
-        n = len(x)
-        mx, my = sum(x) / n, sum(y) / n
-        num = sum((x[i] - mx) * (y[i] - my) for i in range(n))
-        den = (sum((xi - mx) ** 2 for xi in x) * sum((yi - my) ** 2 for yi in y)) ** 0.5
-        return round(num / den, 4) if den else 0
-
-    matrix = []
-    for c1 in codes_with_data:
-        row = {"code": c1, "name": names.get(c1, "")}
-        for c2 in codes_with_data:
-            r1 = all_returns[c1][:min_bars]
-            r2 = all_returns[c2][:min_bars]
-            row[c2] = pearson(r1, r2)
-        matrix.append(row)
-
-    return {"codes": codes_with_data, "matrix": matrix}
+    return PortfolioService.get_correlation(user_id)
 
 
 # ===== 管理员接口 =====

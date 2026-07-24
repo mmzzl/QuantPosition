@@ -90,10 +90,34 @@ def main():
         except Exception as e:
             logging.error(f"分析失败: {t['code']} {t['name']}: {e}")
 
-    from bin.rule_engine import send_dingtalk_message
+    from services.notification_service import send_dingtalk_message
     title, content = build_dingtalk_message(results)
     send_dingtalk_message(title, content)
     logging.info(f"钉钉推送完成: {title}")
+
+
+
+def run(date_str: str = None) -> dict:
+    Log("review_runner", log_type=Log.TYPE_FILE, level=logging.INFO)
+    db = get_db()
+    targets = get_target_stocks(db)
+    if not targets:
+        return {"date": date_str or date.today().strftime("%Y-%m-%d"), "analyzed": 0, "report": None}
+
+    today_str = date_str or date.today().strftime("%Y-%m-%d")
+    results = []
+    for t in targets:
+        try:
+            r = ReviewService.analyze(t["code"], t["name"], today_str)
+            results.append(r)
+        except Exception:
+            pass
+
+    report = ReviewService.generate_review(today_str)
+    title, content = build_dingtalk_message(results)
+    from services.notification_service import send_dingtalk_message
+    send_dingtalk_message(title, content)
+    return {"date": today_str, "analyzed": len(results), "report": report}
 
 
 if __name__ == "__main__":

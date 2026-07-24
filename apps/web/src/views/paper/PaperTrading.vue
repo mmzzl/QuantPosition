@@ -107,7 +107,7 @@ export default {
       this.syncing = true
       try {
         const res = await syncPaperBuy()
-        this.$message.success(`同步 ${res.data.synced} 只`)
+        this.$message.success(`同步 ${res.data.synced_count || res.data.synced || 0} 只`)
         await this.refresh()
       } catch (e) {
         this.$message.error('同步失败')
@@ -117,7 +117,7 @@ export default {
       this.syncing = true
       try {
         const res = await syncPaperSell()
-        this.$message.success(`卖出 ${res.data.sold} 只`)
+        this.$message.success('卖出执行完成')
         await this.refresh()
       } catch (e) {
         this.$message.error('卖出失败')

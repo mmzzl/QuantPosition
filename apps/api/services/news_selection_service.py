@@ -6,6 +6,13 @@ from database import get_db
 class NewsSelectionService:
 
     @staticmethod
+    def run_news_selection() -> str:
+        """提交新闻选股 Celery 任务，返回 task_id"""
+        from tasks.news_selection_tasks import run_news_selection
+        task = run_news_selection.delay()
+        return task.id
+
+    @staticmethod
     def get_news_stocks(
         period: str = "24h",
         start_date: Optional[str] = None,

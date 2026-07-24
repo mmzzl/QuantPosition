@@ -1,52 +1,66 @@
+import logging
+import uuid
+from datetime import datetime, timezone
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
-import logging
+
+logger = logging.getLogger(__name__)
 
 
-
-def _make_json_safe(error_dict: dict) -> dict:
-    """Convert error dict to JSON-safe format by removing non-serializable objects."""
-    result = {}
-    for key, value in error_dict.items():
-        if isinstance(value, dict):
-            result[key] = _make_json_safe(value)
-        elif isinstance(value, (str, int, float, bool, list, type(None))):
-            result[key] = value
-        elif hasattr(value, "__dict__"):
-            result[key] = str(value)
-        else:
-            result[key] = str(value)
-    return result
+def _get_trace_id(request: Request) -> str:
+    return getattr(request.state, "trace_id", str(uuid.uuid4()))
 
 
-async def http_exception_handler(request: Request, exc: Exception):
-    """HTTP异常处理 - 只处理非HTTPException的其他异常"""
+def _error_response(request: Request, status_code: int, detail: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "detail": detail,
+            "trace_id": _get_trace_id(request),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+async def http_exception_handler(request: Request, exc: HTTPException):
     if isinstance(exc, HTTPException):
         return JSONResponse(
             status_code=exc.status_code,
-            content={"detail": exc.detail},
+            content={
+                "detail": exc.detail,
+                "trace_id": _get_trace_id(request),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
         )
-    logging.error(f"HTTP异常: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "服务器内部错误"},
-    )
+    logger.error(f"HTTP exception: {exc}", exc_info=True)
+    return _error_response(request, status.HTTP_500_INTERNAL_SERVER_ERROR, "Internal server error")
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """请求验证异常处理"""
-    logging.error(f"请求验证异常: {exc}")
-    errors = exc.errors()
-    safe_errors = [_make_json_safe(error) for error in errors]
+    logger.error(f"Validation exception: {exc}")
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": safe_errors},
+        content={
+            "detail": str(exc.errors()),
+            "trace_id": _get_trace_id(request),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
     )
 
 
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return _error_response(request, status.HTTP_500_INTERNAL_SERVER_ERROR, "Internal server error")
+
+
+async def service_unavailable_handler(request: Request, exc: Exception):
+    logger.error(f"Service unavailable: {exc}", exc_info=True)
+    return _error_response(request, status.HTTP_503_SERVICE_UNAVAILABLE, "Service unavailable")
+
+
 def setup_error_handlers(app):
-    """设置错误处理"""
-    app.add_exception_handler(Exception, http_exception_handler)
+    app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(Exception, unhandled_exception_handler)

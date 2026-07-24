@@ -4,7 +4,7 @@ from database import get_db
 from datetime import datetime
 
 
-@celery_app.task(bind=True, name="rule_exploration")
+@celery_app.task(bind=True, name="tasks.rule_explore.run_rule_exploration")
 def run_rule_exploration(self, phases: list = None):
     """规则探索主任务：模板搜索 → LLM生成 → 遗传算法"""
     from services.rule_explorer import (
@@ -73,7 +73,7 @@ def run_rule_exploration(self, phases: list = None):
         return {"status": "error", "error": str(e)}
 
 
-@celery_app.task(bind=True, name="rule_validation")
+@celery_app.task(bind=True, name="tasks.rule_explore.run_rule_validation")
 def run_rule_validation(self, scope: str = "all", limit: int = 500, backtest_days: int = 360, max_stocks: int = 500):
     """验证候选规则任务"""
     from services.rule_explorer import validate_candidates

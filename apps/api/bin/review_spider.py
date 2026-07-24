@@ -167,6 +167,14 @@ class MinuteKlineScraper:
         logging.info(f"5m kline fetch completed: total={total}, success={results['success']}, skipped={results['skipped']}, failed={results['failed']}")
 
 
+
+def run(date_str: str = None) -> int:
+    scraper = MinuteKlineScraper()
+    codes = scraper._get_all_stock_codes()
+    scraper.fetch_all()
+    return len(codes)
+
+
 if __name__ == "__main__":
     Log("review_spider", log_type=Log.TYPE_FILE, level=logging.INFO)
     pid_file = os.path.join(home(), "apps", "api", "var", "run", "review_spider.pid")

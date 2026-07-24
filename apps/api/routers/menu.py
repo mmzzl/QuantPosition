@@ -532,8 +532,6 @@ async def get_menu(current_user: AuthenticatedUser = Depends(get_current_user)):
         role = "admin"
     elif "normal_admin" in role_names:
         role = "admin"
-    elif any(r.get("role_type") == "custom" for r in roles):
-        role = "admin"
     else:
         role = "user"
 

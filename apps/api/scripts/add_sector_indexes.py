@@ -15,6 +15,7 @@ def add_indexes():
     # stock_kline 集合索引（与 service 中使用的集合名一致）
     kline = db.stock_kline
     kline.create_index([("code", ASCENDING), ("date", DESCENDING)])
+    kline.create_index([("code", ASCENDING), ("frequency", ASCENDING), ("date", DESCENDING)])
     kline.create_index([("date", DESCENDING)])
     print("stock_kline 索引已创建")
     

@@ -177,6 +177,25 @@ async def change_password(
     return {"message": "Password changed successfully"}
 
 
+@router.put("/{user_id}/role")
+async def assign_user_role(
+    user_id: str,
+    role_data: dict,
+    current_user: AuthenticatedUser = Depends(get_current_active_user)
+):
+    """为用户分配角色"""
+    from services.role_service import RoleService
+    role_id = role_data.get("role_id")
+    if not role_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="role_id is required")
+
+    success = RoleService.add_user_to_role(user_id, role_id)
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to assign role")
+
+    return {"message": "Role assigned successfully"}
+
+
 @router.get("/me/roles")
 async def get_my_roles(
     current_user: AuthenticatedUser = Depends(get_current_active_user)

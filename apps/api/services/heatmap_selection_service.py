@@ -6,6 +6,13 @@ from database import get_db
 class HeatmapSelectionService:
 
     @staticmethod
+    def run_heatmap_selection() -> str:
+        """提交热力图选股 Celery 任务，返回 task_id"""
+        from tasks.heatmap_selection_tasks import run_heatmap_selection
+        task = run_heatmap_selection.delay()
+        return task.id
+
+    @staticmethod
     def get_heatmap_selection(
         period: str = "24h",
         start_date: str = None,

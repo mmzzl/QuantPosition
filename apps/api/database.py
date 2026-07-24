@@ -45,6 +45,7 @@ def _ensure_indexes(db):
 
     # Stock kline collection indexes
     db.stock_kline.create_index([("code", ASCENDING), ("date", DESCENDING)])
+    db.stock_kline.create_index([("code", ASCENDING), ("frequency", ASCENDING), ("date", DESCENDING)])
     db.stock_kline.create_index([("date", DESCENDING)])
 
     # BK stocks collection indexes
@@ -78,6 +79,20 @@ def _ensure_indexes(db):
     # Stock indicators collection indexes
     db.stock_indicators.create_index([("code", ASCENDING), ("date", DESCENDING)])
     db.stock_indicators.create_index([("date", DESCENDING)])
+
+    # backtest_progress collection indexes
+    db.backtest_progress.create_index([("status", ASCENDING)])
+    db.backtest_progress.create_index([("updated_at", DESCENDING)])
+
+    # Holdings collection indexes
+    db.holdings.create_index([("user_id", ASCENDING)])
+    db.holdings.create_index([("user_id", ASCENDING), ("code", ASCENDING)], unique=True)
+    db.holdings.create_index([("code", ASCENDING)])
+
+    # Transactions collection indexes
+    db.transactions.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+    db.transactions.create_index([("user_id", ASCENDING), ("code", ASCENDING)])
+    db.transactions.create_index([("type", ASCENDING), ("user_id", ASCENDING)])
 
 
 def query_sort_end(collection, sort_end = ''):

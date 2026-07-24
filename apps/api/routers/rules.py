@@ -144,12 +144,12 @@ async def validate_condition_endpoint(
 ):
     err = _validate_condition(data.condition)
     if err:
-        return {"valid": False, "error": err}
+        return {"valid": False, "message": err}
     try:
         result = eval(data.condition, {"__builtins__": {}}, TEST_CTX)
     except Exception as e:
-        return {"valid": False, "error": str(e)}
-    return {"valid": True, "result": result}
+        return {"valid": False, "message": str(e)}
+    return {"valid": True, "message": "条件合法", "result": result}
 
 
 # === 规则探索相关端点（必须在 /{rule_id} 之前）===
@@ -389,5 +389,7 @@ async def batch_delete(
     data: BatchDelete,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
+    if not data.rule_ids:
+        raise HTTPException(status_code=400, detail="rule_ids 列表不能为空")
     count = RuleService.batch_delete(data.rule_ids)
     return {"message": f"已删除 {count} 条规则"}

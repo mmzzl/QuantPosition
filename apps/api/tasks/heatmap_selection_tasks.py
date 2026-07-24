@@ -11,7 +11,7 @@ def _normalize_code(code: str) -> str:
     return code.split(".")[0].strip()
 
 
-@celery_app.task(bind=True, name="tasks.heatmap_selection.run")
+@celery_app.task(bind=True, name="tasks.heatmap_selection.run_heatmap_selection")
 def run_heatmap_selection(self) -> Dict[str, Any]:
     try:
         self.update_state(state='PROGRESS', meta={'current': 0, 'total': 0, 'status': '开始扫描板块...'})

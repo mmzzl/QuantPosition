@@ -1,7 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Optional
+from collections import defaultdict
 
 from services.stock_scorer import StockScorer
+from database import get_db
 
 
 class ReviewService:
@@ -635,3 +637,122 @@ class ReviewService:
         result["daily_vol_pattern"] = main_force["daily_vol_pattern"]
         result["daily_patterns"] = main_force["daily_patterns"]
         return result
+
+    @staticmethod
+    def _4layer_verification(code: str) -> Dict[str, Any]:
+        daily_klines = ReviewService._get_daily_klines(code)
+        bars_5m = ReviewService._get_5m_klines(code, date.today().strftime("%Y-%m-%d"))
+        if not bars_5m:
+            return {"intention": "数据不足", "intention_confidence": "低", "intention_detail": "无分时数据"}
+        position = ReviewService._determine_position(daily_klines)
+        vwap_status, vwap = ReviewService._analyze_vwap(bars_5m)
+        volume_signal, vol_detail = ReviewService._analyze_volume(bars_5m)
+        pattern = ReviewService._recognize_pattern(bars_5m, vwap_status, volume_signal)
+        tail_bars = bars_5m[-6:]
+        overall_avg_vol = sum(b["volume"] for b in bars_5m) / max(len(bars_5m), 1)
+        if tail_bars and sum(b["volume"] for b in tail_bars) > len(tail_bars) * overall_avg_vol * 1.5:
+            tail_signal = "抢筹" if tail_bars[-1]["close"] > tail_bars[0]["close"] else "放量跳水"
+        else:
+            tail_signal = "无量横盘"
+        return ReviewService._assess_main_force_intention(
+            position, daily_klines, vwap_status, volume_signal, pattern, tail_signal
+        )
+
+    @staticmethod
+    def _get_industry_for(code: str) -> str:
+        StockScorer._load_industry_cache()
+        pure = code.split(".")[-1] if "." in code else code
+        if StockScorer._industry_cache:
+            return StockScorer._industry_cache.get(pure, "未知")
+        return "未知"
+
+    @staticmethod
+    def generate_review(date_str: str = None) -> Dict[str, Any]:
+        if date_str is None:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+        db = get_db()
+
+        holdings = list(db.holdings.find({}, {"code": 1, "name": 1, "_id": 0}))
+        buy_alerts = list(db.alert_log.find({
+            "trigger_type": "buy", "date": date_str
+        }, {"code": 1, "_id": 0}))
+
+        seen = set()
+        targets = []
+        for h in holdings:
+            code = h.get("code", "")
+            if code and code not in seen:
+                seen.add(code)
+                targets.append({"code": code, "name": h.get("name", "")})
+        for a in buy_alerts:
+            code = a.get("code", "")
+            if code and code not in seen:
+                seen.add(code)
+                targets.append({"code": code, "name": ""})
+
+        results = []
+        for t in targets:
+            try:
+                r = ReviewService.analyze(t["code"], t["name"], date_str)
+                results.append(r)
+            except Exception:
+                pass
+
+        top_stocks = sorted(
+            [r for r in results if r.get("total_score", 0) > 0],
+            key=lambda x: x["total_score"], reverse=True
+        )[:10]
+
+        sector_groups = defaultdict(list)
+        for r in top_stocks:
+            ind = ReviewService._get_industry_for(r.get("code", ""))
+            sector_groups[ind].append(r["total_score"])
+
+        sector_data = []
+        for sname, scores in sorted(sector_groups.items(), key=lambda x: sum(x[1]) / max(len(x[1]), 1), reverse=True):
+            sector_data.append({
+                "sector_name": sname,
+                "avg_score": round(sum(scores) / len(scores), 1),
+                "stock_count": len(scores),
+                "top_stocks": [],
+            })
+
+        total_holdings = len(holdings)
+        hold_count = sum(1 for r in results if r.get("conclusion") == "持有")
+        sell_count = sum(1 for r in results if r.get("conclusion") == "卖出")
+        skip_count = sum(1 for r in results if r.get("conclusion") == "跳过")
+
+        summary_parts = [
+            f"复盘 {date_str}，分析 {total_holdings} 只持仓+{len(buy_alerts)} 只推荐",
+            f"持有信号 {hold_count} 只，卖出信号 {sell_count} 只，跳过 {skip_count} 只",
+        ]
+        if top_stocks:
+            summary_parts.append(f"评分 Top 1: {top_stocks[0]['code']} {top_stocks[0]['name']} ({top_stocks[0]['total_score']}分)")
+
+        report = {
+            "date": date_str,
+            "generated_at": datetime.now().isoformat(),
+            "summary": " | ".join(summary_parts),
+            "top_stocks": [
+                {
+                    "code": r["code"], "name": r["name"],
+                    "score": r.get("total_score", 0), "grade": r.get("grade", "C"),
+                    "conclusion": r.get("conclusion", ""),
+                    "pattern": r.get("pattern", ""),
+                    "intention": r.get("main_force_intention", ""),
+                    "reason": r.get("intention_detail", ""),
+                    "strategy": r.get("strategy", ""),
+                }
+                for r in top_stocks
+            ],
+            "sector_analysis": sector_data,
+            "holdings_analyzed": total_holdings,
+            "total_scored": len(results),
+        }
+
+        db.review_reports.update_one(
+            {"date": date_str},
+            {"$set": report},
+            upsert=True,
+        )
+        return report

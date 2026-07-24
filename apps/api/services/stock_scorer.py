@@ -1,10 +1,17 @@
 import logging
-from typing import Dict, Any, Optional, Set
-from datetime import date
+import math
+from typing import Dict, Any, Optional, Set, List
+from datetime import date, datetime, timezone
 
 from database import get_db
 
 logger = logging.getLogger(__name__)
+
+CACHE_TTL_SECONDS = 60
+GAIN_WEIGHT = 0.30
+QUALITY_WEIGHT = 0.25
+MOMENTUM_WEIGHT = 0.25
+RISK_WEIGHT = 0.20
 
 
 def _pure_code(code: str) -> str:
@@ -88,6 +95,61 @@ class StockScorer:
             pass
         return None
 
+    def batch_score(self, codes: List[str],
+                    name: str = "",
+                    date_str: Optional[str] = None) -> Dict[str, float]:
+        if date_str is None:
+            date_str = date.today().strftime("%Y-%m-%d")
+
+        result = {}
+        for code in codes:
+            cached = self._cached_score(code)
+            if cached:
+                result[code] = cached["score"]
+                continue
+
+            db = self._get_db()
+            klines = list(db.stock_kline.find(
+                {"code": code, "date": {"$lte": date_str}}
+            ).sort("date", -1).limit(60))
+
+            if not klines:
+                result[code] = 0.0
+                continue
+
+            indicators = db.stock_indicators.find_one(
+                {"code": code},
+                sort=[("date", -1)]
+            )
+
+            gain = self._gain_score(klines)
+            qual = self._quality_score(klines, indicators)
+            mom = self._momentum_score(klines)
+            risk = self._risk_score(klines)
+
+            unified = (
+                gain * GAIN_WEIGHT
+                + qual * QUALITY_WEIGHT
+                + mom * MOMENTUM_WEIGHT
+                + risk * RISK_WEIGHT
+            )
+
+            is_st = name and ("ST" in name.upper().replace("*", "") or "退" in name)
+            if is_st:
+                unified = 0.0
+
+            unified = max(0.0, min(100.0, unified))
+            result[code] = round(unified, 2)
+
+            self._save_cached_score(code, unified, {
+                "gain": round(gain, 2),
+                "quality": round(qual, 2),
+                "momentum": round(mom, 2),
+                "risk": round(risk, 2),
+            })
+
+        return result
+
     def score(self, code: str, name: str = "",
               date_str: Optional[str] = None) -> Dict[str, Any]:
         if date_str is None:
@@ -144,6 +206,209 @@ class StockScorer:
                 "risk": rc,
             },
         }
+
+    def _cached_score(self, code: str) -> Optional[Dict]:
+        db = self._get_db()
+        doc = db.scorer_score.find_one({"code": code})
+        if doc:
+            cached_at = doc.get("cached_at")
+            if isinstance(cached_at, datetime):
+                now = datetime.now(timezone.utc)
+                if cached_at.tzinfo is None:
+                    cached_at = cached_at.replace(tzinfo=timezone.utc)
+                age = (now - cached_at).total_seconds()
+                if age < CACHE_TTL_SECONDS:
+                    return {
+                        "code": doc["code"],
+                        "score": doc["score"],
+                        "dimensions": doc["dimensions"],
+                        "cached_at": cached_at,
+                    }
+        return None
+
+    def _save_cached_score(self, code: str, score: float, dimensions: dict):
+        db = self._get_db()
+        doc = {
+            "code": code,
+            "score": score,
+            "dimensions": dimensions,
+            "cached_at": datetime.now(timezone.utc),
+        }
+        db.scorer_score.update_one(
+            {"code": code},
+            {"$set": doc},
+            upsert=True,
+        )
+
+    def _gain_score(self, klines: List[Dict]) -> float:
+        if not klines or len(klines) < 5:
+            return 0.0
+
+        sorted_k = sorted(klines, key=lambda x: x["date"], reverse=True)
+        closes = [k["close"] for k in sorted_k[:20]]
+        if closes[0] <= 0:
+            return 0.0
+
+        decays = [1.0]
+        for i in range(1, len(closes)):
+            decays.append(decays[-1] * 0.92)
+        total_decay = sum(decays)
+
+        weighted_return = 0.0
+        for i in range(1, len(closes)):
+            if closes[i] > 0:
+                daily_return = (closes[0] - closes[i]) / closes[i]
+                weighted_return += daily_return * decays[i]
+
+        cumulative = weighted_return / max(total_decay, 0.001)
+
+        if cumulative >= 0:
+            raw = 50.0 + min(cumulative, 0.3) / 0.3 * 50.0
+        else:
+            raw = max(0.0, 50.0 + max(cumulative, -0.3) / 0.3 * 50.0)
+        return max(0.0, min(100.0, raw))
+
+    def _risk_score(self, klines: List[Dict]) -> float:
+        if not klines or len(klines) < 10:
+            return 25.0
+
+        sorted_k = sorted(klines, key=lambda x: x["date"], reverse=True)
+        closes = [k["close"] for k in sorted_k[:30]]
+
+        daily_returns = []
+        for i in range(1, len(closes)):
+            if closes[i] > 0:
+                daily_returns.append((closes[i - 1] - closes[i]) / closes[i])
+
+        if not daily_returns:
+            return 25.0
+
+        mean = sum(daily_returns) / len(daily_returns)
+        variance = sum((r - mean) ** 2 for r in daily_returns) / len(daily_returns)
+        volatility = math.sqrt(variance)
+
+        max_dd = 0.0
+        peak = closes[0]
+        for c in closes[1:]:
+            if c > peak:
+                peak = c
+            dd = (peak - c) / max(peak, 0.01)
+            if dd > max_dd:
+                max_dd = dd
+
+        vol_score = min(100.0, 60.0 / max(volatility, 0.001))
+        dd_score = 100.0 * (1.0 - min(max_dd, 0.5) * 2.0)
+        raw = vol_score * 0.6 + dd_score * 0.4
+        return max(0.0, min(100.0, raw))
+
+    def _momentum_score(self, klines: List[Dict]) -> float:
+        if not klines or len(klines) < 20:
+            return 25.0
+
+        sorted_k = sorted(klines, key=lambda x: x["date"], reverse=True)
+        closes = [k["close"] for k in sorted_k[:30]]
+
+        def ma(values, n):
+            return sum(values[:n]) / n if len(values) >= n else sum(values) / len(values)
+
+        ma5 = ma(closes, 5)
+        ma10 = ma(closes, 10)
+        ma20 = ma(closes, 20)
+        ma_trend = 40.0 if (ma5 > ma10 > ma20 and closes[0] > ma5) else (
+            20.0 if closes[0] > ma5 else 0.0
+        )
+
+        gains = []
+        losses = []
+        for i in range(1, min(15, len(closes))):
+            delta = closes[i - 1] - closes[i]
+            if delta > 0:
+                gains.append(delta)
+            else:
+                losses.append(abs(delta))
+        avg_gain = sum(gains) / max(len(gains), 1)
+        avg_loss = sum(losses) / max(len(losses), 1)
+        if avg_gain + avg_loss < 0.0001:
+            rsi_val = 50.0
+        else:
+            rs = avg_gain / max(avg_loss, 0.0001)
+            rsi_val = 100.0 - 100.0 / (1.0 + rs)
+
+        rsi_score = max(0.0, min(100.0, rsi_val))
+        if 40 <= rsi_val <= 70:
+            rsi_score = 80.0 - abs(rsi_val - 55) * 2.0
+        elif rsi_val > 70:
+            rsi_score = max(10.0, 80.0 - (rsi_val - 70) * 1.0)
+        elif rsi_val < 40:
+            rsi_score = max(0.0, rsi_val * 1.5)
+
+        macd_score = 0.0
+        ema12 = closes[-1]
+        ema26 = closes[-1]
+        diffs = []
+        alpha12 = 2.0 / 13.0
+        alpha26 = 2.0 / 27.0
+        alpha9 = 2.0 / 10.0
+        for c in reversed(closes):
+            ema12 = c * alpha12 + ema12 * (1 - alpha12)
+            ema26 = c * alpha26 + ema26 * (1 - alpha26)
+            diffs.append(ema12 - ema26)
+        diff = diffs[-1]
+        dea = diffs[-1]
+        for d in diffs:
+            dea = d * alpha9 + dea * (1 - alpha9)
+        macd_bar = 2 * (diff - dea)
+
+        if macd_bar > 0 and diff > 0 and diff > dea:
+            macd_score = 60.0
+        elif macd_bar > 0:
+            macd_score = 40.0
+        else:
+            macd_score = 20.0
+
+        raw = ma_trend * 0.4 + rsi_score * 0.3 + macd_score * 0.3
+        return max(0.0, min(100.0, raw))
+
+    def _quality_score(self, klines: List[Dict], indicators: Optional[Dict] = None) -> float:
+        if not klines or len(klines) < 10:
+            return 25.0
+
+        sorted_k = sorted(klines, key=lambda x: x["date"], reverse=True)
+        turnovers = []
+        for k in sorted_k[:20]:
+            if k.get("turnover"):
+                turnovers.append(float(k["turnover"]))
+        if not turnovers:
+            volume_ratio = 0.0
+            for k in sorted_k[:20]:
+                if k.get("volume"):
+                    volume_ratio += k["volume"]
+            avg_vol = volume_ratio / max(len(sorted_k[:20]), 1)
+            turnovers = [min(avg_vol / 1_000_000, 30.0)]
+
+        mean = sum(turnovers) / len(turnovers)
+        if len(turnovers) >= 2:
+            var = sum((t - mean) ** 2 for t in turnovers) / len(turnovers)
+            std = math.sqrt(var)
+            cv = std / max(mean, 0.001)
+        else:
+            cv = 0.5
+
+        stability_score = max(0.0, min(100.0, 100.0 * (1.0 - min(cv, 1.5) / 1.5)))
+
+        optimal = 3.0 <= mean <= 18.0
+        optimal_score = 80.0 if optimal else (
+            50.0 if 1.5 <= mean <= 25.0 else 20.0
+        )
+
+        indicator_bonus = 0.0
+        if indicators:
+            inst = indicators.get("institutional_holding")
+            if isinstance(inst, (int, float)) and inst > 30:
+                indicator_bonus = 10.0
+
+        raw = stability_score * 0.5 + optimal_score * 0.4 + indicator_bonus * 0.1
+        return max(0.0, min(100.0, raw))
 
     @staticmethod
     def _calc_grade(total_score: int) -> str:
