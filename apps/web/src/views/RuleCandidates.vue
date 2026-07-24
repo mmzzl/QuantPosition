@@ -32,6 +32,7 @@
           <div class="stat-value" :style="{ color: stats.bestReturn >= 0 ? '#67c23a' : '#f56c6c' }">
             {{ stats.bestReturn != null ? (stats.bestReturn >= 0 ? '+' : '') + stats.bestReturn + '%' : '-' }}
           </div>
+        </el-col>
       </el-row>
     </el-card>
 
