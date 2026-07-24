@@ -27,6 +27,11 @@
           <div class="stat-label">最优评分</div>
           <div class="stat-value">{{ stats.bestScore }}</div>
         </el-col>
+        <el-col :span="6">
+          <div class="stat-label">最优收益</div>
+          <div class="stat-value" :style="{ color: stats.bestReturn >= 0 ? '#67c23a' : '#f56c6c' }">
+            {{ stats.bestReturn != null ? (stats.bestReturn >= 0 ? '+' : '') + stats.bestReturn + '%' : '-' }}
+          </div>
       </el-row>
     </el-card>
 
@@ -86,6 +91,14 @@
       <el-table-column prop="sell_condition" label="卖出条件" min-width="180" show-overflow-tooltip />
       <el-table-column prop="risk_condition" label="风控条件" min-width="180" show-overflow-tooltip />
       <el-table-column prop="composite_score" label="综合评分" width="90" sortable />
+      <el-table-column label="回测收益" width="100" sortable prop="portfolio_return">
+        <template #default="{ row }">
+          <span v-if="row.portfolio_return != null" :style="{ color: row.portfolio_return >= 0 ? '#67c23a' : '#f56c6c' }">
+            {{ (row.portfolio_return >= 0 ? '+' : '') + row.portfolio_return + '%' }}
+          </span>
+          <span v-else style="color:#999">-</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="validation_round" label="轮次" width="70">
         <template #default="{ row }">
           <el-tag :type="row.validation_round === 2 ? 'success' : row.validation_round === 1 ? 'warning' : 'info'" size="small">
@@ -147,7 +160,7 @@ const pageSize = ref(50)
 const showBlacklist = ref(false)
 const blacklist = ref([])
 const filter = ref({ validation_round: null, source: null })
-const stats = ref({ total: 0, validated: 0, blacklist: 0, bestScore: 0 })
+const stats = ref({ total: 0, validated: 0, blacklist: 0, bestScore: 0, bestReturn: null })
 const validateDays = ref(360)
 const validateStocks = ref(500)
 
@@ -178,6 +191,7 @@ async function fetchStats() {
     stats.value.blacklist = bl.data.total || 0
     if (validatedRes.data.candidates?.[0]) {
       stats.value.bestScore = validatedRes.data.candidates[0].composite_score || 0
+      stats.value.bestReturn = validatedRes.data.candidates[0].portfolio_return
     }
   } catch {}
 }
