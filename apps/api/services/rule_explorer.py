@@ -240,9 +240,9 @@ def composite_score(sharpe: float, total_return: float, win_rate: float,
     sharpe_clamped = min(max(sharpe, -3), 3)
     sharpe_norm = (sharpe_clamped + 3) / 6 * 100
 
-    # 年化收益 -50%~100% → 0~100
-    ret_clamped = min(max(annualized_return, -50), 100)
-    return_norm = (ret_clamped + 50) / 150 * 100
+    # 年化收益 -20%~+50% → 0~100（缩窄量程，提高收益区分度）
+    ret_clamped = min(max(annualized_return, -20), 50)
+    return_norm = (ret_clamped + 20) / 70 * 100
 
     win_norm = min(max(win_rate, 0), 100)
 
