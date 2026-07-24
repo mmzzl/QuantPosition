@@ -7,6 +7,22 @@ class StockSelectionService:
     """选股服务"""
 
     @staticmethod
+    def run_dual_ma(short_period: int = 5, long_period: int = 20) -> str:
+        """提交双均线选股 Celery 任务，返回 task_id"""
+        from tasks.selection_tasks import run_dual_ma_selection
+        task = run_dual_ma_selection.delay(
+            short_period=short_period,
+            long_period=long_period
+        )
+        return task.id
+
+    @staticmethod
+    def save_selection_result(collection, result: dict) -> None:
+        """保存单条选股结果到数据库"""
+        from copy import deepcopy
+        collection.insert_one(deepcopy(result))
+
+    @staticmethod
     def dual_moving_average_selection(
         short_period: int = 5,
         long_period: int = 20,
@@ -47,7 +63,7 @@ class StockSelectionService:
                 "date": {"$gte": start_str, "$lte": end_str + " 23:59"}
             }).sort("date", 1))
             
-            if len(klines) < long_period:
+            if len(klines) < long_period + 1:
                 continue
             
             # 计算均线

@@ -4,13 +4,37 @@
       <h2>交易规则</h2>
       <div>
         <el-button type="success" @click="goCandidates">候选规则</el-button>
-        <el-button type="warning" :loading="exploring" @click="handleExplore">规则探索</el-button>
+        <el-button type="warning" :loading="exploring" @click="showExploreDialog = true">规则探索</el-button>
         <el-button type="danger" :disabled="!selectedIds.length" @click="handleBatchDelete">
           批量删除 ({{ selectedIds.length }})
         </el-button>
         <el-button type="primary" @click="openDialog()">新增</el-button>
       </div>
     </div>
+
+    <el-dialog v-model="showExploreDialog" title="规则探索" width="420px">
+      <div style="margin-bottom:16px;color:#909399;font-size:13px">选择要运行的探索阶段：</div>
+      <el-checkbox-group v-model="explorePhases">
+        <el-checkbox label="template" value="template">
+          <span style="font-weight:500">模板网格搜索</span>
+          <span style="color:#909399;font-size:12px;margin-left:8px">生成大量随机组合（耗时短）</span>
+        </el-checkbox>
+        <br/>
+        <el-checkbox label="llm" value="llm">
+          <span style="font-weight:500">LLM 生成</span>
+          <span style="color:#909399;font-size:12px;margin-left:8px">AI 批量生成有意义的规则（需配置 LLM）</span>
+        </el-checkbox>
+        <br/>
+        <el-checkbox label="genetic" value="genetic">
+          <span style="font-weight:500">遗传算法</span>
+          <span style="color:#909399;font-size:12px;margin-left:8px">在已有规则基础上变异/交叉（耗时长）</span>
+        </el-checkbox>
+      </el-checkbox-group>
+      <template #footer>
+        <el-button @click="showExploreDialog = false">取消</el-button>
+        <el-button type="primary" :loading="exploring" @click="handleExplore">开始探索</el-button>
+      </template>
+    </el-dialog>
 
     <el-card>
       <el-table :data="rules" v-loading="loading" stripe @selection-change="onSelectionChange">
@@ -138,6 +162,8 @@ const loading = ref(false)
 const saving = ref(false)
 const testing = ref(false)
 const exploring = ref(false)
+const showExploreDialog = ref(false)
+const explorePhases = ref(['template', 'llm', 'genetic'])
 const testResult = ref(null)
 const conditionRef = ref(null)
 
@@ -164,8 +190,8 @@ const varGroups = [
   { label: '持仓数据', vars: [
     { name: 'has_pos', desc: '是否持仓 (true/false)' },
     { name: 'cost', desc: '持仓成本' },
-    { name: 'buy_date', desc: '买入日期 (如 2026-05-19)' },
-    { name: 'today', desc: '当前日期' },
+    { name: 'buy_date', desc: '买入日期 (用数字序号，如 739500)' },
+    { name: 'today', desc: '当前日期 (数字序号)' },
   ]},
 ]
 
@@ -178,8 +204,9 @@ function goCandidates() {
 async function handleExplore() {
   exploring.value = true
   try {
-    const res = await startExplore()
+    const res = await startExplore(explorePhases.value)
     ElMessage.success(res.data.message)
+    showExploreDialog.value = false
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '启动失败')
   } finally {
@@ -240,7 +267,7 @@ async function fetchRules() {
   finally { loading.value = false }
 }
 
-const ALLOWED_VARS = ['price', 'vol', 'ma5', 'ma10', 'ma5_vol', 'last_close', 'high', 'low', 'open', 'has_pos', 'cost', 'buy_date', 'today']
+const ALLOWED_VARS = ['price', 'vol', 'ma5', 'ma10', 'ma20', 'ma60', 'ma5_vol', 'last_close', 'high', 'low', 'open', 'rsi', 'atr', 'adx', 'amplitude', 'has_pos', 'cost', 'buy_date', 'today']
 const FORBIDDEN = ['import', 'exec', 'eval', 'os', 'sys', 'subprocess', '__import__', '__builtins__', '__class__', 'getattr', 'setattr', 'globals', 'locals', 'compile', 'breakpoint']
 
 function validateCondition(cond) {

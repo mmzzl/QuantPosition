@@ -1,0 +1,30 @@
+[project]
+name = "sunny-sailor"
+version = "0.1.0"
+description = "Sunny Sailor - Stock analysis platform"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]",
+    "pymongo>=4.5.0",
+    "python-jose[cryptography]",
+    "bcrypt>=4.0.0",
+    "celery>=5.3.0",
+    "redis>=5.0.0",
+    "requests>=2.31.0",
+    "apscheduler>=3.10.0",
+    "PyYAML>=6.0",
+    "pydantic-settings>=2.0.0",
+    "python-json-logger>=2.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.setuptools.packages.find]
+where = ["apps/api"]
+
+[tool.pytest.ini_options]
+testpaths = ["apps/api/tests"]
+python_files = ["test_*.py"]

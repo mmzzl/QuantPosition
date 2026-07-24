@@ -524,21 +524,17 @@ def get_default_menu(role: str = "user") -> Dict[str, Any]:
 @router.get("", response_model=MenuResponse)
 async def get_menu(current_user: AuthenticatedUser = Depends(get_current_user)):
     """获取用户菜单和权限"""
-    from database import get_db
-    from bson import ObjectId
-    
-    db = get_db()
-    users_collection = db.users
-    
-    # 获取用户角色
-    role = "user"
-    try:
-        user_doc = users_collection.find_one({"_id": ObjectId(current_user.user_id)})
-        if user_doc:
-            role = user_doc.get("role", "user")
-    except Exception:
-        pass
-    
+    from services.role_service import RoleService
+
+    roles = RoleService.get_user_roles(current_user.user_id)
+    role_names = {r.get("preset_key") or r.get("name", "") for r in roles}
+    if "super_admin" in role_names or "system_admin" in role_names:
+        role = "admin"
+    elif "normal_admin" in role_names:
+        role = "admin"
+    else:
+        role = "user"
+
     menu_data = get_default_menu(role)
-    
+
     return menu_data

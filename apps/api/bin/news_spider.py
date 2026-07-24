@@ -106,10 +106,8 @@ class NewsSpider(object):
                     self.save_progress(sort_end, req_trace)
                     # 直接返回，不再请求新闻列表API
                     return
-                    news_response = self.get_history_news(self.sort_end)    
-            else:
-                logging.info("没有新闻数据，获取最新新闻")
-                news_response = self.get_history_news(self.sort_end)
+            logging.info("获取历史新闻")
+            news_response = self.get_history_news(self.sort_end)
             sort_end = self.sort_end
         else:
             # 有新闻，那么sortEnd为空，表示获取最新的新闻列表
@@ -124,9 +122,12 @@ class NewsSpider(object):
             full_news_url = f"{news_url}?{urlencode(news_params)}"
             news_response = self.send_request(full_news_url)
         news_list = self.parse_news_response(news_response)
-        self.sort_start = news_list[0].get('realSort', '') 
+        if not news_list:
+            logging.warning("新闻列表为空，跳过本次处理")
+            return
+        self.sort_start = news_list[0].get('realSort', '')
         self.save_news(news_list)
-        print(sort_end)
+        logging.info(f"sort_end: {sort_end}")
         self.save_progress(sort_end, current_req_trace)
     
     def get_history_news(self, sort_end):
@@ -170,7 +171,7 @@ class NewsSpider(object):
         """加载爬取进度"""
         base_path = os.path.dirname(os.path.abspath(__file__))
         progress_path = os.path.join(base_path, settings.spider_progress_file)
-        if os.path.exists(progress_path):
+        if os.path.exists(progress_path) and os.path.getsize(progress_path) > 0:
             with open(progress_path, 'r', encoding='utf-8') as f:
                 progress_data = json.load(f)
                 return progress_data

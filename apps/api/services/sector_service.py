@@ -1,97 +1,138 @@
+import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from database import get_db
+
+logger = logging.getLogger(__name__)
 
 
 class SectorService:
-    """板块服务"""
+    """板块服务 – 板块热力图、板块股票列表、K线查询、K线刷新"""
+
+    SECTOR_COLLECTION = "sector_stocks"
+    KLINE_COLLECTION = "stock_kline"
 
     @staticmethod
-    def get_sector_heatmap(period: str = "24h", start_date: str = None, end_date: str = None) -> Dict[str, Any]:
-        """获取板块热力图数据"""
-        db = get_db()
-        kline_collection = db.stock_kline
-        bk_collection = db.bk_stocks
+    def _resolve_date_range(period: str, start_date: Optional[str], end_date: Optional[str]):
+        if period == "custom":
+            if not start_date or not end_date:
+                raise ValueError("period=custom 时必须提供 start_date 和 end_date")
+            return start_date, end_date + " 23:59"
 
-        # 计算日期范围
         if start_date and end_date:
-            start_str = start_date
-            end_str = end_date
+            return start_date, end_date + " 23:59"
+
+        end_dt = datetime.now()
+        if period == "7d":
+            start_dt = end_dt - timedelta(days=7)
+        elif period == "30d":
+            start_dt = end_dt - timedelta(days=30)
         else:
-            end_dt = datetime.now()
-            if period == "7d":
-                start_dt = end_dt - timedelta(days=7)
-            elif period == "30d":
-                start_dt = end_dt - timedelta(days=30)
-            else:  # 24h
-                start_dt = end_dt - timedelta(days=1)
-            start_str = start_dt.strftime("%Y-%m-%d")
-            end_str = end_dt.strftime("%Y-%m-%d")
+            start_dt = end_dt - timedelta(days=1)
 
-        # 获取所有板块及其股票（使用 bk_stocks 概念板块分类）
-        all_bk = list(bk_collection.find({}, {"bk_name": 1, "bk_code": 1, "stock_code": 1}))
+        return start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d") + " 23:59"
 
-        # 构建板块->股票代码映射
-        sector_map = {}
-        all_stock_codes = set()
-        for item in all_bk:
-            sector_name = item["bk_name"]
-            if sector_name not in sector_map:
-                sector_map[sector_name] = {"sector_code": item.get("bk_code", ""), "stocks": []}
-            pure_code = item["stock_code"].strip()
-            sector_map[sector_name]["stocks"].append(pure_code)
-            all_stock_codes.add(pure_code)
+    @staticmethod
+    def get_sector_heatmap(
+        period: str = "24h",
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """获取板块热力图数据 – MongoDB aggregate pipeline 按板块+时间范围计算等权涨跌幅"""
+        db = get_db()
+        sector_collection = db[SectorService.SECTOR_COLLECTION]
+        kline_collection = db[SectorService.KLINE_COLLECTION]
 
-        # 批量查询所有股票的K线数据
-        klines = list(kline_collection.find({
-            "code": {"$in": list(all_stock_codes)},
-            "frequency": 9,
-            "date": {"$gte": start_str, "$lte": end_str + " 23:59"}
-        }).sort("date", 1))
+        start_str, end_str = SectorService._resolve_date_range(period, start_date, end_date)
 
-        # 按股票分组
+        sectors = list(sector_collection.find({}, {"sector_name": 1, "sector_code": 1, "_id": 0}))
+        if not sectors:
+            return {"sectors": [], "period": period, "total_sectors": 0,
+                    "start_date": start_str.split(" ")[0], "end_date": end_str.split(" ")[0]}
+
+        seen = {}
+        for s in sectors:
+            if s["sector_name"] not in seen:
+                seen[s["sector_name"]] = {"sector_name": s["sector_name"],
+                                          "sector_code": s.get("sector_code", ""), "stocks": []}
+
+        sector_stocks = list(sector_collection.find(
+            {"sector_name": {"$in": list(seen.keys())}},
+            {"sector_name": 1, "stock_code": 1, "stock_name": 1, "_id": 0}
+        ))
+        for ss in sector_stocks:
+            raw_code = ss["stock_code"]
+            pure_code = raw_code.split(".")[0] if "." in raw_code else raw_code
+            if ss["sector_name"] in seen:
+                seen[ss["sector_name"]]["stocks"].append(pure_code)
+
+        all_codes = set()
+        for info in seen.values():
+            all_codes.update(info["stocks"])
+        if not all_codes:
+            heatmap_data = [{"sector_name": s["sector_name"],
+                             "sector_code": s["sector_code"],
+                             "change_pct": 0, "stock_count": len(s["stocks"]),
+                             "volume": 0} for s in seen.values()]
+            heatmap_data.sort(key=lambda x: x["change_pct"], reverse=True)
+            return {"sectors": heatmap_data, "period": period,
+                    "total_sectors": len(heatmap_data),
+                    "start_date": start_str.split(" ")[0],
+                    "end_date": end_str.split(" ")[0]}
+
+        base_date = start_str.split(" ")[0]
+        end_date_only = end_str.split(" ")[0]
+
+        pipeline = [
+            {"$match": {
+                "code": {"$in": list(all_codes)},
+                "frequency": 9,
+                "date": {"$gte": start_str, "$lte": end_str}
+            }},
+            {"$sort": {"code": 1, "date": 1}},
+            {"$group": {
+                "_id": "$code",
+                "first_close": {"$first": "$close"},
+                "first_date": {"$first": "$date"},
+                "last_close": {"$last": "$close"},
+                "last_date": {"$last": "$date"},
+                "last_volume": {"$last": "$volume"}
+            }}
+        ]
+        agg_result = list(kline_collection.aggregate(pipeline))
+
         stock_prices = {}
-        for k in klines:
-            code = k["code"]
-            if code not in stock_prices:
-                stock_prices[code] = {"first": k, "last": k}
-            else:
-                if k["date"] < stock_prices[code]["first"]["date"]:
-                    stock_prices[code]["first"] = k
-                if k["date"] > stock_prices[code]["last"]["date"]:
-                    stock_prices[code]["last"] = k
+        for doc in agg_result:
+            code = doc["_id"]
+            fc = doc.get("first_close", 0)
+            lc = doc.get("last_close", 0)
+            lv = doc.get("last_volume", 0)
+            if fc > 0 and lc > 0:
+                stock_prices[code] = {
+                    "change_pct": ((lc - fc) / fc) * 100,
+                    "volume": lv,
+                    "first_close": fc,
+                    "last_close": lc,
+                }
 
-        # 计算每个板块的涨跌幅
         heatmap_data = []
-        for sector_name, sector_info in sector_map.items():
+        for sector_name, sector_info in seen.items():
             changes = []
-            total_volume = 0
-            volume_count = 0
-            stock_count = len(sector_info["stocks"])
-
-            valid_codes = []
+            volumes = []
             for pure_code in sector_info["stocks"]:
-                prices = stock_prices.get(pure_code)
-                if prices:
-                    first_close = prices["first"].get("close", 0)
-                    last_close = prices["last"].get("close", 0)
-                    if first_close > 0 and last_close > 0:
-                        change_pct = ((last_close - first_close) / first_close) * 100
-                        changes.append(change_pct)
-                        valid_codes.append(pure_code)
-                        total_volume += prices["last"].get("volume", 0)
-                        volume_count += 1
+                sp = stock_prices.get(pure_code)
+                if sp:
+                    changes.append(sp["change_pct"])
+                    volumes.append(sp["volume"])
 
+            stock_count = len(sector_info["stocks"])
             if changes:
-                avg_change = sum(changes) / len(changes)
                 heatmap_data.append({
                     "sector_name": sector_name,
                     "sector_code": sector_info["sector_code"],
-                    "change_pct": round(avg_change, 2),
+                    "change_pct": round(sum(changes) / len(changes), 2),
                     "stock_count": stock_count,
-                    "avg_volume": round(total_volume / volume_count, 2) if volume_count > 0 else 0,
-                    "start_price": round(sum(stock_prices[c]["first"]["close"] for c in valid_codes) / len(valid_codes), 2),
-                    "end_price": round(sum(stock_prices[c]["last"]["close"] for c in valid_codes) / len(valid_codes), 2)
+                    "volume": round(sum(volumes) / len(volumes), 2),
                 })
             else:
                 heatmap_data.append({
@@ -99,64 +140,62 @@ class SectorService:
                     "sector_code": sector_info["sector_code"],
                     "change_pct": 0,
                     "stock_count": stock_count,
-                    "avg_volume": 0,
-                    "start_price": 0,
-                    "end_price": 0
+                    "volume": 0,
                 })
 
-        # 按涨跌幅排序
         heatmap_data.sort(key=lambda x: x["change_pct"], reverse=True)
-
         return {
             "sectors": heatmap_data,
             "period": period,
             "total_sectors": len(heatmap_data),
-            "start_date": start_str,
-            "end_date": end_str
+            "start_date": base_date,
+            "end_date": end_date_only,
         }
 
     @staticmethod
-    def get_sector_stocks(sector_name: str, period: str = "24h", start_date: str = None, end_date: str = None, sort_by: str = "change_pct", sort_order: str = "desc", page: int = 1, page_size: int = 50) -> Dict[str, Any]:
-        """获取指定板块的股票列表"""
+    def get_sector_stocks(
+        sector_name: str,
+        period: str = "24h",
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        sort_by: str = "change_pct",
+        sort_order: str = "desc",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> Dict[str, Any]:
+        """获取指定板块的股票列表 — 不存在的板块返回空列表而非404"""
         db = get_db()
-        bk_collection = db.bk_stocks
-        kline_collection = db.stock_kline
+        sector_collection = db[SectorService.SECTOR_COLLECTION]
 
-        # 获取板块内所有股票（bk_stocks 中 bk_name 为板块名）
-        stocks = list(bk_collection.find({"bk_name": sector_name}))
-        if not stocks:
-            raise ValueError(f"板块不存在: {sector_name}")
+        stocks_in_sector = list(sector_collection.find(
+            {"sector_name": sector_name},
+            {"sector_code": 1, "stock_code": 1, "stock_name": 1, "_id": 0}
+        ))
+        if not stocks_in_sector:
+            return {
+                "sector_name": sector_name, "sector_code": "",
+                "stocks": [], "total": 0, "page": page, "page_size": page_size,
+            }
 
-        sector_code = stocks[0].get("bk_code", "")
-        # 提取纯代码
-        stock_codes = []
-        for s in stocks:
-            pure_code = s["stock_code"].strip()
-            stock_codes.append(pure_code)
+        sector_code = stocks_in_sector[0].get("sector_code", "")
 
-        # 计算日期范围
-        if start_date and end_date:
-            start_str = start_date
-            end_str = end_date
-        else:
-            end_dt = datetime.now()
-            if period == "7d":
-                start_dt = end_dt - timedelta(days=7)
-            elif period == "30d":
-                start_dt = end_dt - timedelta(days=30)
-            else:  # 24h
-                start_dt = end_dt - timedelta(days=1)
-            start_str = start_dt.strftime("%Y-%m-%d")
-            end_str = end_dt.strftime("%Y-%m-%d")
+        start_str, end_str = SectorService._resolve_date_range(period, start_date, end_date)
+        kline_collection = db[SectorService.KLINE_COLLECTION]
 
-        # 查询时间段内K线数据
+        pure_codes = []
+        code_map = {}
+        for s in stocks_in_sector:
+            raw_code = s["stock_code"]
+            pure_code = raw_code.split(".")[0] if "." in raw_code else raw_code
+            pure_codes.append(pure_code)
+            code_map[pure_code] = raw_code
+
         klines = list(kline_collection.find({
-            "code": {"$in": stock_codes},
+            "code": {"$in": pure_codes},
             "frequency": 9,
-            "date": {"$gte": start_str, "$lte": end_str + " 23:59"}
+            "date": {"$gte": start_str, "$lte": end_str},
         }).sort("date", 1))
 
-        # 按股票分组，找出期初和期末价格
         stock_prices = {}
         for k in klines:
             code = k["code"]
@@ -168,47 +207,44 @@ class SectorService:
                 if k["date"] > stock_prices[code]["last"]["date"]:
                     stock_prices[code]["last"] = k
 
-        # 构建股票列表
         stock_list = []
-        for stock in stocks:
-            code = stock["stock_code"]
-            pure_code = code.split(".")[-1] if "." in code else code
+        for s in stocks_in_sector:
+            raw_code = s["stock_code"]
+            pure_code = raw_code.split(".")[0] if "." in raw_code else raw_code
             prices = stock_prices.get(pure_code, {})
             first_kline = prices.get("first", {})
             last_kline = prices.get("last", {})
 
             current_price = last_kline.get("close", 0)
-            open_price = first_kline.get("close", 0)
+            first_price = first_kline.get("close", 0)
             change_pct = 0
-            if open_price > 0 and current_price > 0:
-                change_pct = ((current_price - open_price) / open_price) * 100
+            if first_price > 0 and current_price > 0:
+                change_pct = ((current_price - first_price) / first_price) * 100
 
             stock_list.append({
-                "code": code,
-                "name": stock.get("stock_name", ""),
+                "code": raw_code,
+                "name": s.get("stock_name", ""),
                 "change_pct": round(change_pct, 2),
                 "current_price": current_price,
-                "open_price": open_price,
+                "first_price": first_price,
                 "high": last_kline.get("high", 0),
                 "low": last_kline.get("low", 0),
                 "volume": last_kline.get("volume", 0),
-                "amount": last_kline.get("amount", 0)
+                "amount": last_kline.get("amount", 0),
             })
 
-        # 排序
         reverse = sort_order == "desc"
-        if sort_by == "change_pct":
-            stock_list.sort(key=lambda x: x["change_pct"], reverse=reverse)
-        elif sort_by == "volume":
-            stock_list.sort(key=lambda x: x["volume"], reverse=reverse)
-        elif sort_by == "name":
+        key_map = {"change_pct": "change_pct", "volume": "volume", "name": "name"}
+        key_field = key_map.get(sort_by, "change_pct")
+        if key_field == "name":
             stock_list.sort(key=lambda x: x["name"], reverse=reverse)
+        else:
+            stock_list.sort(key=lambda x: float(x.get(key_field, 0)), reverse=reverse)
 
-        # 分页
         total = len(stock_list)
-        start = (page - 1) * page_size
-        end = start + page_size
-        paginated = stock_list[start:end]
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated = stock_list[start_idx:end_idx]
 
         return {
             "sector_name": sector_name,
@@ -216,29 +252,38 @@ class SectorService:
             "stocks": paginated,
             "total": total,
             "page": page,
-            "page_size": page_size
+            "page_size": page_size,
         }
 
     @staticmethod
-    def get_kline_data(code: str, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
-        """获取股票K线数据，不传日期则自动取最近1年"""
+    def get_kline_data(
+        code: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """获取股票K线数据 — 数据不存在返回空列表而非raise"""
         db = get_db()
-        kline_collection = db.stock_kline
+        kline_collection = db[SectorService.KLINE_COLLECTION]
+        sector_collection = db[SectorService.SECTOR_COLLECTION]
 
         # 处理代码格式
-        pure_code = code.split(".")[-1] if "." in code else code
+        if "." in code:
+            pure_code = code.split(".")[0]
+        else:
+            pure_code = code
 
-        # 获取股票名称（bk_stocks 或 sector_stocks）
-        stock = db.bk_stocks.find_one({"stock_code": pure_code})
-        if not stock:
-            stock = db.sector_stocks.find_one({"stock_code": {"$regex": f"{pure_code}$"}})
+        # 获取股票名称
+        stock = sector_collection.find_one({"stock_code": {"$regex": f"{pure_code}$"}})
         stock_name = stock.get("stock_name", "") if stock else ""
 
-        # 不传日期时，以该股最新一条K线日期为终点向前取1年
-        if not start_date or not end_date:
+        # 日期范围
+        if start_date and end_date:
+            start_str = start_date
+            end_str = end_date + " 23:59"
+        else:
             latest = kline_collection.find_one(
                 {"code": pure_code, "frequency": 9},
-                sort=[("date", -1)]
+                sort=[("date", -1)],
             )
             if latest:
                 raw = latest["date"]
@@ -251,26 +296,20 @@ class SectorService:
             start_dt = end_dt - timedelta(days=365)
             start_str = start_dt.strftime("%Y-%m-%d")
             end_str = end_dt.strftime("%Y-%m-%d") + " 23:59"
-        else:
-            start_str = start_date
-            end_str = end_date + " 23:59"
 
         klines = list(kline_collection.find({
             "code": pure_code,
             "frequency": 9,
-            "date": {"$gte": start_str, "$lte": end_str}
+            "date": {"$gte": start_str, "$lte": end_str},
         }).sort("date", 1))
-
-        if not klines:
-            raise ValueError(f"未找到股票K线数据: {code}")
 
         data = []
         for k in klines:
-            date_str = k["date"]
-            if isinstance(date_str, datetime):
-                date_str = date_str.strftime("%Y-%m-%d")
+            date_val = k["date"]
+            if isinstance(date_val, datetime):
+                date_str = date_val.strftime("%Y-%m-%d")
             else:
-                date_str = str(date_str).split(" ")[0]
+                date_str = str(date_val).split(" ")[0]
             data.append({
                 "date": date_str,
                 "open": k.get("open", 0),
@@ -278,7 +317,7 @@ class SectorService:
                 "high": k.get("high", 0),
                 "low": k.get("low", 0),
                 "volume": k.get("volume", 0),
-                "amount": k.get("amount", 0)
+                "amount": k.get("amount", 0),
             })
 
         return {
@@ -286,5 +325,5 @@ class SectorService:
             "name": stock_name,
             "period": "daily",
             "data": data,
-            "total": len(data)
+            "total": len(data),
         }

@@ -115,7 +115,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getNewsStocks } from '@/api/news_selection'
+import { getNewsStocks, runNewsSelection, getNewsTaskStatus } from '@/api/news_selection'
 import { getKlineData } from '@/api/sectors'
 import KLineChart from '@/views/holdings/KLineChart.vue'
 
@@ -141,15 +141,13 @@ async function runSelection() {
   taskProgress.value = { current: 0, total: 0, status: '提交任务...' }
 
   try {
-    const { getTaskStatus } = await import('@/api/selections')
-    const { runNewsSelection } = await import('@/api/news_selection')
     const res = await runNewsSelection()
     const taskId = res.data.task_id
 
     ElMessage.info('新闻选股任务已提交，正在处理...')
     pollTimer = setInterval(async () => {
       try {
-        const sr = await getTaskStatus(taskId)
+        const sr = await getNewsTaskStatus(taskId)
         const { status, progress, result } = sr.data
         if (status === 'SUCCESS') {
           clearInterval(pollTimer)

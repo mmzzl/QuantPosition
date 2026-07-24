@@ -26,6 +26,7 @@
       "children": [
         {"path": "/selections/dual-ma", "label": "双均线选股", "permission": "selections:view"},
         {"path": "/selections/news", "label": "新闻选股", "permission": "selections:view"},
+        {"path": "/selections/heatmap", "label": "热力图选股", "permission": "selections:view"},
         {"path": "/backtest", "label": "策略回测", "permission": "holdings:view"},
         {"path": "/paper-trading", "label": "模拟盘", "permission": "holdings:view"}
       ]

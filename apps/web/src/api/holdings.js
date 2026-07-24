@@ -35,10 +35,10 @@ export function deleteHolding(code) {
   return http.delete(`/holdings/${userId}/${code}`)
 }
 
-export function getHistory(page = 1, pageSize = 20) {
+export function getHistory(page = 1, pageSize = 20, sortBy = 'created_at', sortOrder = 'desc') {
   const userId = getUserIdOrDefault()
   return http.get(`/holdings/${userId}/history`, {
-    params: { page, page_size: pageSize }
+    params: { page, page_size: pageSize, sort_by: sortBy, sort_order: sortOrder }
   })
 }
 

@@ -40,7 +40,8 @@ class TransactionService:
         }
 
     @staticmethod
-    def get_transactions(user_id: str, page: int = 1, page_size: int = 20) -> Dict:
+    def get_transactions(user_id: str, page: int = 1, page_size: int = 20,
+                         sort_by: str = "created_at", sort_order: str = "desc") -> Dict:
         """获取交易记录列表"""
         db = get_db()
         transactions_collection = db.transactions
@@ -48,13 +49,27 @@ class TransactionService:
         skip = (page - 1) * page_size
         total = transactions_collection.count_documents({"user_id": user_id})
 
-        transactions = list(transactions_collection.find(
-            {"user_id": user_id}
-        ).sort("created_at", -1).skip(skip).limit(page_size))
+        sort_dir = -1 if sort_order == "desc" else 1
+
+        if sort_by == "realized_pnl":
+            pipeline = [
+                {"$match": {"user_id": user_id}},
+                {"$addFields": {
+                    "sort_order_pnl": {"$cond": [{"$ifNull": ["$realized_pnl", False]}, 0, 1]}
+                }},
+                {"$sort": {"sort_order_pnl": 1, "realized_pnl": sort_dir}},
+                {"$skip": skip},
+                {"$limit": page_size}
+            ]
+            transactions = list(transactions_collection.aggregate(pipeline))
+        else:
+            transactions = list(transactions_collection.find(
+                {"user_id": user_id}
+            ).sort(sort_by, sort_dir).skip(skip).limit(page_size))
 
         items = []
         for t in transactions:
-            items.append({
+            item = {
                 "id": str(t["_id"]),
                 "user_id": t["user_id"],
                 "code": t["code"],
@@ -62,8 +77,10 @@ class TransactionService:
                 "quantity": t["quantity"],
                 "price": t["price"],
                 "total": t["total"],
-                "created_at": t["created_at"]
-            })
+                "created_at": t["created_at"],
+                "realized_pnl": t.get("realized_pnl")
+            }
+            items.append(item)
 
         return {
             "total": total,
@@ -73,9 +90,10 @@ class TransactionService:
         }
 
     @staticmethod
-    def get_history(user_id: str, page: int = 1, page_size: int = 20) -> Dict:
+    def get_history(user_id: str, page: int = 1, page_size: int = 20,
+                    sort_by: str = "created_at", sort_order: str = "desc") -> Dict:
         """获取持仓历史（与 get_transactions 相同）"""
-        return TransactionService.get_transactions(user_id, page, page_size)
+        return TransactionService.get_transactions(user_id, page, page_size, sort_by, sort_order)
 
     @staticmethod
     def delete_transaction(user_id: str, transaction_id: str) -> bool:
@@ -126,41 +144,18 @@ class TransactionService:
 
     @staticmethod
     def get_all_realized_pnl() -> Dict:
-        """管理员获取所有用户已实现盈亏"""
+        """管理员获取所有用户已实现盈亏（聚合每条卖出记录的 realized_pnl）"""
         db = get_db()
         transactions_collection = db.transactions
 
-        # 按用户分组计算
         pipeline = [
-            {"$match": {"type": "sell"}},
-            {"$group": {"_id": "$user_id", "total_sell": {"$sum": "$total"}}}
+            {"$match": {"type": "sell", "realized_pnl": {"$exists": True}}},
+            {"$group": {"_id": "$user_id", "realized_pnl": {"$sum": "$realized_pnl"}}}
         ]
 
-        sell_by_user = list(transactions_collection.aggregate(pipeline))
+        results = list(transactions_collection.aggregate(pipeline))
 
-        pipeline = [
-            {"$match": {"type": "buy"}},
-            {"$group": {"_id": "$user_id", "total_buy": {"$sum": "$total"}}}
-        ]
-
-        buy_by_user = list(transactions_collection.aggregate(pipeline))
-
-        sell_dict = {item["_id"]: item["total_sell"] for item in sell_by_user}
-        buy_dict = {item["_id"]: item["total_buy"] for item in buy_by_user}
-
-        users = set(sell_dict.keys()) | set(buy_dict.keys())
-
-        results = []
-        for user_id in users:
-            total_sell = sell_dict.get(user_id, 0)
-            total_buy = buy_dict.get(user_id, 0)
-            realized_pnl = round(total_sell - total_buy, 2)
-
-            results.append({
-                "user_id": user_id,
-                "total_sell": total_sell,
-                "total_buy": total_buy,
-                "realized_pnl": realized_pnl
-            })
-
-        return {"users": results, "total_realized_pnl": sum(r["realized_pnl"] for r in results)}
+        return {
+            "users": [{"user_id": r["_id"], "realized_pnl": round(r["realized_pnl"], 2)} for r in results],
+            "total_realized_pnl": round(sum(r["realized_pnl"] for r in results), 2)
+        }

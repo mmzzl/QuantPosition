@@ -6,6 +6,13 @@ from database import get_db
 class NewsSelectionService:
 
     @staticmethod
+    def run_news_selection() -> str:
+        """提交新闻选股 Celery 任务，返回 task_id"""
+        from tasks.news_selection_tasks import run_news_selection
+        task = run_news_selection.delay()
+        return task.id
+
+    @staticmethod
     def get_news_stocks(
         period: str = "24h",
         start_date: Optional[str] = None,
@@ -18,7 +25,10 @@ class NewsSelectionService:
         db = get_db()
 
         if start_date and end_date:
-            query = {"created_at": {"$gte": start_date, "$lte": end_date + " 23:59"}}
+            query = {"created_at": {
+                "$gte": datetime.strptime(start_date, "%Y-%m-%d"),
+                "$lte": datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            }}
         else:
             now = datetime.now()
             if period == "7d":

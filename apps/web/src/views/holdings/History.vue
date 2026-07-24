@@ -6,6 +6,15 @@
     </div>
 
     <el-card>
+      <div style="margin-bottom: 16px; display: flex; align-items: center; gap: 12px;">
+        <span style="font-size: 14px; color: #606266;">排序方式</span>
+        <el-select v-model="sortBy" @change="onSortChange" style="width: 140px" size="small">
+          <el-option label="时间排序" value="created_at" />
+          <el-option label="盈利最好" value="best" />
+          <el-option label="亏损最多" value="worst" />
+        </el-select>
+      </div>
+
       <el-table :data="transactions" v-loading="loading" stripe>
         <el-table-column prop="created_at" label="时间" width="180">
           <template #default="{ row }">
@@ -29,6 +38,14 @@
         <el-table-column prop="total" label="总额" width="120">
           <template #default="{ row }">
             {{ row.total?.toFixed(2) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="盈亏" width="120">
+          <template #default="{ row }">
+            <span v-if="row.realized_pnl != null" :style="{ color: row.realized_pnl >= 0 ? '#67c23a' : '#f56c6c' }">
+              {{ row.realized_pnl >= 0 ? '+' : '' }}{{ row.realized_pnl?.toFixed(2) }}
+            </span>
+            <span v-else style="color: #c0c4cc;">-</span>
           </template>
         </el-table-column>
       </el-table>
@@ -57,6 +74,7 @@ const transactions = ref([])
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
+const sortBy = ref('created_at')
 
 function formatDate(dateStr) {
   if (!dateStr) return '-'
@@ -64,10 +82,22 @@ function formatDate(dateStr) {
   return date.toLocaleString('zh-CN')
 }
 
+function getSortParams(val) {
+  if (val === 'best') return ['realized_pnl', 'desc']
+  if (val === 'worst') return ['realized_pnl', 'asc']
+  return ['created_at', 'desc']
+}
+
+function onSortChange() {
+  page.value = 1
+  fetchHistory()
+}
+
 async function fetchHistory() {
   loading.value = true
   try {
-    const res = await getHistory(page.value, pageSize.value)
+    const [sortField, sortOrder] = getSortParams(sortBy.value)
+    const res = await getHistory(page.value, pageSize.value, sortField, sortOrder)
     transactions.value = res.data.items || []
     total.value = res.data.total || 0
   } catch (e) {

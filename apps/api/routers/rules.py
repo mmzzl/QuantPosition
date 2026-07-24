@@ -1,12 +1,40 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
+from typing import Optional, List
 from pydantic import BaseModel
 from bson import ObjectId
+from datetime import datetime, timedelta
 from app.core.auth import AuthenticatedUser, get_current_user
-from services.rule_service import RuleService
 from database import get_db
+from services.rule_service import RuleService
+
+
+class ExploreRequest(BaseModel):
+    phases: List[str] = ["template", "llm", "genetic"]
+
 
 router = APIRouter(prefix="/rules", tags=["交易规则"])
+
+STALE_THRESHOLD_MINUTES = 5
+
+
+def _reset_stale_progress(progress: dict, db) -> dict:
+    """检测并重置卡死的任务进度"""
+    if progress and progress.get("status") == "running":
+        updated_at = progress.get("updated_at")
+        if updated_at and isinstance(updated_at, datetime):
+            if datetime.now() - updated_at > timedelta(minutes=STALE_THRESHOLD_MINUTES):
+                db.rule_explore_progress.update_one(
+                    {"_id": "current"},
+                    {"$set": {
+                        "status": "error", "phase": "stale",
+                        "phase_label": "任务已失效（Celery 重启或崩溃）",
+                        "error_msg": "上次任务未正常结束，已自动重置",
+                        "updated_at": datetime.now(),
+                    }}
+                )
+                progress["status"] = "error"
+                progress["phase_label"] = "任务已失效，可重新开始"
+    return progress
 
 FORBIDDEN_NAMES = {
     "import", "exec", "eval", "os", "sys", "subprocess",
@@ -17,8 +45,11 @@ FORBIDDEN_NAMES = {
 
 TEST_CTX = {
     "price": 25.5, "vol": 100000, "ma5": 25.0, "ma10": 24.5,
+    "ma20": 24.0, "ma60": 23.5,
     "ma5_vol": 80000, "last_close": 25.3, "high": 27.0, "low": 23.0,
-    "open": 25.4, "has_pos": True, "cost": 26.0,
+    "open": 25.4,
+    "rsi": 55, "atr": 1.2, "adx": 30, "amplitude": 0.035,
+    "has_pos": True, "cost": 26.0,
     "buy_date": 739500, "today": 739520,
 }
 
@@ -96,8 +127,9 @@ async def create_rule(
     data: RuleCreate,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
-    if data.condition:
-        validate_condition(data.condition)
+    if not data.condition or not data.condition.strip():
+        raise HTTPException(status_code=400, detail="条件不能为空")
+    validate_condition(data.condition)
     return RuleService.create_rule(data.model_dump())
 
 
@@ -112,12 +144,12 @@ async def validate_condition_endpoint(
 ):
     err = _validate_condition(data.condition)
     if err:
-        return {"valid": False, "error": err}
+        return {"valid": False, "message": err}
     try:
         result = eval(data.condition, {"__builtins__": {}}, TEST_CTX)
     except Exception as e:
-        return {"valid": False, "error": str(e)}
-    return {"valid": True, "result": result}
+        return {"valid": False, "message": str(e)}
+    return {"valid": True, "message": "条件合法", "result": result}
 
 
 # === 规则探索相关端点（必须在 /{rule_id} 之前）===
@@ -130,6 +162,7 @@ async def get_explore_status(
     progress = db.rule_explore_progress.find_one({"_id": "current"})
     if not progress:
         return {"status": "idle", "phase": "none"}
+    progress = _reset_stale_progress(progress, db)
     progress.pop("_id", None)
     return progress
 
@@ -138,18 +171,20 @@ from tasks.rule_explore_tasks import run_rule_exploration
 
 @router.post("/explore")
 async def start_explore(
+    data: ExploreRequest,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
     db = get_db()
     progress = db.rule_explore_progress.find_one({"_id": "current"})
+    progress = _reset_stale_progress(progress, db) if progress else progress
     if progress and progress.get("status") == "running":
         raise HTTPException(status_code=409, detail="已有探索任务在运行中，请等待完成")
 
     settings = db.system_settings.find_one({"_id": "global"}) or {}
-    if not settings.get("llm_api_key"):
-        raise HTTPException(status_code=400, detail="请先在系统设置中配置 LLM API Key")
+    if "llm" in data.phases and not settings.get("llm_api_key"):
+        raise HTTPException(status_code=400, detail="LLM 阶段需要先配置 LLM API Key")
 
-    task = run_rule_exploration.delay()
+    task = run_rule_exploration.delay(data.phases)
     return {"task_id": task.id, "message": "探索任务已启动"}
 
 
@@ -158,13 +193,15 @@ from tasks.rule_explore_tasks import run_rule_validation
 class ValidateRequest(BaseModel):
     scope: str = "all"
     limit: int = 500
+    backtest_days: int = 360
+    max_stocks: int = 500
 
 @router.post("/validate-candidates")
 async def start_validate(
     data: ValidateRequest,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
-    task = run_rule_validation.delay(data.scope, data.limit)
+    task = run_rule_validation.delay(data.scope, data.limit, data.backtest_days, data.max_stocks)
     return {"task_id": task.id, "message": "验证任务已启动"}
 
 
@@ -219,6 +256,17 @@ async def delete_candidate(
 
 class ClearRequest(BaseModel):
     scope: str = "all"
+
+@router.post("/candidates/{candidate_id}/apply")
+async def apply_single_candidate(
+    candidate_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """用指定候选规则替换当前规则"""
+    from services.rule_explorer import apply_candidate_by_id
+    result = apply_candidate_by_id(candidate_id)
+    return {"message": result}
+
 
 @router.delete("/candidates")
 async def clear_candidates(
@@ -341,5 +389,7 @@ async def batch_delete(
     data: BatchDelete,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
+    if not data.rule_ids:
+        raise HTTPException(status_code=400, detail="rule_ids 列表不能为空")
     count = RuleService.batch_delete(data.rule_ids)
     return {"message": f"已删除 {count} 条规则"}

@@ -81,7 +81,6 @@ class Log(object):
 
         logger = logging.getLogger()
         logger.setLevel(level)
-        logger.handlers = []
         logger.addHandler(handler)
 
     def _init_console(self, level=logging.INFO):
@@ -90,8 +89,9 @@ class Log(object):
         :param level: 日志级别
         :return:
         """
-        logging.basicConfig(
-            level=level, format=self.format, datefmt=self.FORMAT_DATE)
+        if not logging.getLogger().hasHandlers():
+            logging.basicConfig(
+                level=level, format=self.format, datefmt=self.FORMAT_DATE)
 
     def _init_sys_log(self, mode_name, level=logging.INFO):
         """

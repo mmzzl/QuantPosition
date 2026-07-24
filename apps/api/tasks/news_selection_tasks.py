@@ -5,7 +5,7 @@ from celery_config import celery_app
 from database import get_db
 
 
-@celery_app.task(bind=True, name="tasks.news_selection.run")
+@celery_app.task(bind=True, name="tasks.news_selection.run_news_selection")
 def run_news_selection(self):
     """新闻选股 Celery 任务：扫描新闻→提取 BK→查股票→计算价格→缓存结果"""
     try:
@@ -16,7 +16,7 @@ def run_news_selection(self):
 
         # 1. 获取有 BK 板块的新闻
         news_list = list(db.news.find(
-            {"stockList": {"$ne": []}},
+            {"stockList": {"$exists": True, "$not": {"$size": 0}}},
             {"title": 1, "showTime": 1, "stockList": 1}
         ).sort("showTime", -1).limit(100))
 
@@ -46,7 +46,7 @@ def run_news_selection(self):
             {"bk_code": {"$in": list(bk_set)}},
             {"bk_code": 1, "bk_name": 1, "stock_code": 1, "stock_name": 1}
         ))
-        bk_name_map = {r["bk_code"]: r.get("bk_name", "") for r in bk_stocks}
+        bk_name_map = {r.get("bk_code", ""): r.get("bk_name", "") for r in bk_stocks}
         stock_codes = list(set(r["stock_code"] for r in bk_stocks))
 
         self.update_state(state='PROGRESS', meta={
@@ -204,10 +204,14 @@ def run_news_selection(self):
 
         final_results = list(deduped.values())
 
-        # 7. 缓存到 MongoDB（先清旧数据，深拷贝避免 insert_many 注入 ObjectId）
-        cache_collection.delete_many({})
-        if final_results:
-            cache_collection.insert_many(copy.deepcopy(final_results))
+        # 7. 缓存到 MongoDB（按批次写入，避免大对象）
+        batch_id = int(datetime.now().timestamp() * 1000)
+        for r in final_results:
+            r["batch_id"] = batch_id
+        BATCH_SIZE = 500
+        for i in range(0, len(final_results), BATCH_SIZE):
+            cache_collection.insert_many(final_results[i:i + BATCH_SIZE])
+        cache_collection.delete_many({"batch_id": {"$ne": batch_id}})
 
         self.update_state(state='PROGRESS', meta={
             'current': len(stock_codes), 'total': len(stock_codes),

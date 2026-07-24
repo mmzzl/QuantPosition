@@ -9,7 +9,12 @@ def get_db():
     """连接到MongoDB数据库并返回数据库对象"""
     global _client, _db
     if _db is None:
-        _client = MongoClient(f"mongodb://{settings.mongodb_host}:{settings.mongodb_port}/")
+        _client = MongoClient(
+            f"mongodb://{settings.mongodb_host}:{settings.mongodb_port}/",
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
+            maxPoolSize=20,
+        )
         _db = _client[settings.mongodb_db]
         _ensure_indexes(_db)
     return _db
@@ -17,6 +22,9 @@ def get_db():
 
 def _ensure_indexes(db):
     """确保必要的索引存在"""
+    # User collection indexes
+    db.users.create_index([("username", ASCENDING)], unique=True)
+
     # Role collection indexes
     db.roles.create_index([("name", ASCENDING)], unique=True)
     db.roles.create_index([("role_type", ASCENDING)])
@@ -37,11 +45,13 @@ def _ensure_indexes(db):
 
     # Stock kline collection indexes
     db.stock_kline.create_index([("code", ASCENDING), ("date", DESCENDING)])
+    db.stock_kline.create_index([("code", ASCENDING), ("frequency", ASCENDING), ("date", DESCENDING)])
     db.stock_kline.create_index([("date", DESCENDING)])
 
     # BK stocks collection indexes
     db.bk_stocks.create_index([("bk_code", ASCENDING)])
     db.bk_stocks.create_index([("stock_code", ASCENDING)])
+    db.bk_stocks.create_index([("bk_name", ASCENDING)])
     db.bk_stocks.create_index([("bk_code", ASCENDING), ("stock_code", ASCENDING)], unique=True)
 
     # News selection cache indexes
@@ -66,16 +76,34 @@ def _ensure_indexes(db):
     # Rule blacklist collection indexes
     db.rule_blacklist.create_index("condition_normalized")
 
+    # Stock indicators collection indexes
+    db.stock_indicators.create_index([("code", ASCENDING), ("date", DESCENDING)])
+    db.stock_indicators.create_index([("date", DESCENDING)])
 
-def query_sort_end(colletion, sort_end = ''):
+    # backtest_progress collection indexes
+    db.backtest_progress.create_index([("status", ASCENDING)])
+    db.backtest_progress.create_index([("updated_at", DESCENDING)])
+
+    # Holdings collection indexes
+    db.holdings.create_index([("user_id", ASCENDING)])
+    db.holdings.create_index([("user_id", ASCENDING), ("code", ASCENDING)], unique=True)
+    db.holdings.create_index([("code", ASCENDING)])
+
+    # Transactions collection indexes
+    db.transactions.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+    db.transactions.create_index([("user_id", ASCENDING), ("code", ASCENDING)])
+    db.transactions.create_index([("type", ASCENDING), ("user_id", ASCENDING)])
+
+
+def query_sort_end(collection, sort_end = ''):
     """查询数据库中最新的新闻的realSort作为sortEnd"""
-    result = colletion.find_one({
+    result = collection.find_one({
         "realSort":sort_end
     }) 
     return True if result else False
 
 
-def get_sort_end(colletion):
+def get_sort_end(collection):
     """查询数据库中最新的新闻的realSort作为sortEnd"""
-    result = colletion.find_one(sort=[("realSort", -1)]) 
+    result = collection.find_one(sort=[("realSort", -1)]) 
     return result['realSort'] if result else ''

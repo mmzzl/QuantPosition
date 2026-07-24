@@ -222,8 +222,8 @@ class GetDataFromMongo(GetData):
             logging.info(
                 f"MongoDB -> CSV {action}导出完成: {exported} 只股票更新, {skipped} 只无数据, 目录: {data_dir}")
             return exported
-        finally:
-            self.db.client.close()
+        except Exception:
+            raise
 
     def csv_to_qlib(
         self,

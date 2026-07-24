@@ -6,9 +6,129 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from database import get_db
 from bin.rule_engine import StockRuleEngine
+from services.backtest_engine import run_backtest, calculate_metrics
+from services import task_progress
 
 
 class BacktestService:
+
+    @staticmethod
+    def submit(
+        days_back: int = 360,
+        initial_cash: float = 100000,
+        commission: float = 0.001,
+        max_stocks: int = 500,
+        max_positions: int = 5,
+        max_hold_days: int = 60,
+        cooldown_days: int = 1,
+    ) -> str:
+        from tasks.backtest_tasks import run_simple_backtest
+        task = run_simple_backtest.delay(
+            days_back=days_back,
+            initial_cash=initial_cash,
+            commission=commission,
+            max_stocks=max_stocks,
+            max_positions=max_positions,
+            max_hold_days=max_hold_days,
+            cooldown_days=cooldown_days,
+        )
+        db = get_db()
+        db.backtest_progress.update_one(
+            {"_id": task.id},
+            {"$set": {
+                "status": "submitted",
+                "submitted_at": datetime.now(),
+                "current": 0, "total": 0, "detail": "",
+            }},
+            upsert=True,
+        )
+        return task.id
+
+    @staticmethod
+    def get_task_status(task_id: str) -> dict:
+        prog = task_progress.get_progress(task_id)
+        if prog.get("status") == "PENDING":
+            from celery.result import AsyncResult
+            r = AsyncResult(task_id)
+            return {"task_id": task_id, "status": r.status}
+
+        db = get_db()
+        prog_raw = db.backtest_progress.find_one({"_id": task_id})
+        if not prog_raw:
+            return {"task_id": task_id, "status": "PENDING"}
+
+        prog_status = prog_raw.get("status", "")
+        submitted_at = prog_raw.get("submitted_at")
+
+        if prog_status in ("回测失败", "error"):
+            return {
+                "task_id": task_id,
+                "status": "FAILURE",
+                "error": prog_raw.get("detail", "回测执行失败"),
+            }
+
+        if prog_status.startswith("回测完成"):
+            inline_result = prog_raw.get("result")
+            if inline_result:
+                return {
+                    "task_id": task_id,
+                    "status": "SUCCESS",
+                    "result": inline_result,
+                }
+            from celery.result import AsyncResult
+            r = AsyncResult(task_id)
+            if r.status == "SUCCESS":
+                return {"task_id": task_id, "status": "SUCCESS", "result": r.result}
+            latest = db.backtest_results.find_one({"_id": "latest"})
+            if latest:
+                latest.pop("_id", None)
+                latest.pop("saved_at", None)
+                return {"task_id": task_id, "status": "SUCCESS", "result": latest}
+            return {"task_id": task_id, "status": "SUCCESS", "result": {
+                "trades": 0, "portfolio_return": 0,
+                "processed": prog_raw.get("total", 0), "skipped": 0,
+            }}
+
+        if submitted_at and prog_status in ("submitted", "初始化...", "等待中...", ""):
+            from celery.result import AsyncResult
+            r = AsyncResult(task_id)
+            if r.status == "PENDING":
+                elapsed = (datetime.now() - submitted_at).total_seconds()
+                if elapsed > 30:
+                    return {
+                        "task_id": task_id,
+                        "status": "FAILURE",
+                        "error": "Celery 工作进程未运行，请检查 celery worker 是否已启动",
+                    }
+
+        return {
+            "task_id": task_id,
+            "status": "RUNNING",
+            "progress": {
+                "current": prog_raw.get("current", 0),
+                "total": prog_raw.get("total", 0),
+                "status": prog_raw.get("status", ""),
+                "detail": prog_raw.get("detail", ""),
+            },
+        }
+
+    @staticmethod
+    def get_latest() -> dict:
+        db = get_db()
+        doc = db.backtest_results.find_one({"_id": "latest"})
+        if not doc:
+            return {"exists": False}
+        doc.pop("_id", None)
+        doc.pop("saved_at", None)
+        return doc
+
+    @staticmethod
+    def calculate_metrics(
+        equity_curve: List[float],
+        trades: List[dict],
+        initial_cash: float,
+    ) -> Dict[str, Any]:
+        return calculate_metrics(equity_curve, trades, initial_cash)
 
     @staticmethod
     def _load_klines(code: str, start_date: str, end_date: str) -> List[Dict]:

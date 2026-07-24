@@ -161,7 +161,7 @@ def fetch_today_news() -> list:
 
 def run_news_analysis():
     """主函数：分析新闻并推送钉钉"""
-    from bin.rule_engine import send_dingtalk_message
+    from services.notification_service import send_dingtalk_message
 
     db = get_db()
     settings = db.system_settings.find_one({"_id": "global"}) or {}

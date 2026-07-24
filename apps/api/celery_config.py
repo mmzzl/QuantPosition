@@ -28,9 +28,15 @@ celery_app.conf.update(
 )
 
 # 显式导入任务模块，确保 @celery_app.task 装饰器注册
-from tasks import selection_tasks  # noqa
-from tasks import news_selection_tasks  # noqa
-from tasks import kline_tasks  # noqa
-from tasks import backtest_tasks  # noqa
-from tasks import rule_explore_tasks  # noqa
+_TASK_MODULES = [
+    "selection_tasks", "news_selection_tasks", "kline_tasks",
+    "backtest_tasks", "rule_explore_tasks", "heatmap_selection_tasks",
+    "indicator_tasks",
+]
+for _mod in _TASK_MODULES:
+    try:
+        __import__(f"tasks.{_mod}")
+    except Exception as e:
+        logging.warning(f"导入任务模块 tasks.{_mod} 失败: {e}")
+
 Log("celery", log_type=Log.TYPE_FILE, level=logging.INFO)

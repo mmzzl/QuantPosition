@@ -3,7 +3,6 @@
     <div class="page-header">
       <h2>候选规则池</h2>
       <div>
-        <el-button @click="handleValidate" :loading="validating">验证规则</el-button>
         <el-button type="primary" @click="handleApply" :loading="applying">一键更新规则</el-button>
         <el-button @click="showBlacklist = true">查看黑名单</el-button>
         <el-button type="danger" @click="handleClear">清空候选</el-button>
@@ -27,6 +26,30 @@
         <el-col :span="6">
           <div class="stat-label">最优评分</div>
           <div class="stat-value">{{ stats.bestScore }}</div>
+        </el-col>
+      </el-row>
+    </el-card>
+
+    <el-card style="margin-bottom: 16px">
+      <el-row :gutter="16">
+        <el-col :span="6">
+          <div class="label">回测天数</div>
+          <el-select v-model="validateDays" style="width:100%">
+            <el-option label="180 天" :value="180" />
+            <el-option label="360 天（推荐）" :value="360" />
+          </el-select>
+        </el-col>
+        <el-col :span="6">
+          <div class="label">候选股票数</div>
+          <el-select v-model="validateStocks" style="width:100%">
+            <el-option label="100 只（快速）" :value="100" />
+            <el-option label="300 只" :value="300" />
+            <el-option label="500 只（推荐）" :value="500" />
+            <el-option label="全市场" :value="0" />
+          </el-select>
+        </el-col>
+        <el-col :span="6" :offset="6" style="display:flex;align-items:flex-end">
+          <el-button @click="handleValidate" :loading="validating" style="width:100%">验证规则</el-button>
         </el-col>
       </el-row>
     </el-card>
@@ -70,8 +93,9 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="80">
+      <el-table-column label="操作" width="180">
         <template #default="{ row }">
+          <el-button size="small" type="primary" @click="handleApplySingle(row)">更新规则</el-button>
           <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -110,7 +134,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getCandidates, deleteCandidate, clearCandidates,
   startValidateCandidates, applyCandidates,
-  getBlacklist, deleteBlacklist
+  getBlacklist, deleteBlacklist, applyCandidate
 } from '@/api/rules'
 
 const loading = ref(false)
@@ -124,6 +148,8 @@ const showBlacklist = ref(false)
 const blacklist = ref([])
 const filter = ref({ validation_round: null, source: null })
 const stats = ref({ total: 0, validated: 0, blacklist: 0, bestScore: 0 })
+const validateDays = ref(360)
+const validateStocks = ref(500)
 
 function sourceType(s) { return { template: '', llm: 'success', genetic: 'warning' }[s] || 'info' }
 
@@ -185,7 +211,7 @@ async function handleClear() {
 async function handleValidate() {
   validating.value = true
   try {
-    await startValidateCandidates('all', 500)
+    await startValidateCandidates('all', 500, validateDays.value, validateStocks.value)
     ElMessage.success('验证任务已启动')
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '启动验证失败')
@@ -203,6 +229,18 @@ async function handleApply() {
   } catch (e) {
     if (e !== 'cancel') ElMessage.error(e.response?.data?.detail || '更新失败')
   } finally { applying.value = false }
+}
+
+async function handleApplySingle(row) {
+  try {
+    await ElMessageBox.confirm(`确定用「${row.name || '未命名'}」替换当前规则？会自动备份。`, '更新规则')
+    const res = await applyCandidate(row._id)
+    ElMessage.success(res.data.message)
+    fetchCandidates()
+    fetchStats()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.response?.data?.detail || '更新失败')
+  }
 }
 
 async function handleRemoveBlacklist(row) {
@@ -227,4 +265,5 @@ onMounted(() => {
 .page-header h2 { margin: 0; }
 .stat-label { font-size: 12px; color: #909399; }
 .stat-value { font-size: 24px; font-weight: bold; margin-top: 4px; }
+.label { font-size: 12px; color: #909399; margin-bottom: 4px; }
 </style>

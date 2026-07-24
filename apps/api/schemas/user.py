@@ -13,8 +13,7 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
-    role: Optional[str] = "user"
-    is_active: Optional[bool] = True
+    is_active: Optional[bool] = None
 
 
 class ChangePassword(BaseModel):
@@ -27,7 +26,6 @@ class UserResponse(BaseModel):
     username: str
     email: Optional[str] = None
     phone: Optional[str] = None
-    role: str = "user"
     is_active: bool
     created_at: datetime
     updated_at: datetime

@@ -36,21 +36,16 @@ def import_sector_data(csv_path=None):
     db = client[settings.mongodb_db]
     collection = db.sector_stocks
     
-    # 清空现有数据
-    collection.delete_many({})
-    print("已清空sector_stocks集合")
-    
-    # 读取CSV并导入
+    # 读取CSV并导入（幂等upsert: replace_one with sector_name+stock_code 作为复合key）
     count = 0
+    insert_count = 0
+    update_count = 0
     errors = 0
-    batch = []
-    batch_size = 500
     
     with open(csv_path, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         for row in reader:
             try:
-                # 解析CSV字段
                 code = row.get('code', '').strip()
                 code_name = row.get('code_name', '').strip()
                 industry = row.get('industry', '').strip()
@@ -58,7 +53,6 @@ def import_sector_data(csv_path=None):
                 if not code or not industry:
                     continue
                 
-                # 解析行业字段，如 "J66货币金融服务" -> code="J66", name="货币金融服务"
                 sector_code = ''
                 sector_name = industry
                 m = re.match(r'^([A-Z]\d+)(.+)$', industry)
@@ -66,7 +60,6 @@ def import_sector_data(csv_path=None):
                     sector_code = m.group(1)
                     sector_name = m.group(2).strip()
                 
-                # 构建文档
                 doc = {
                     'sector_name': sector_name,
                     'sector_code': sector_code,
@@ -75,22 +68,20 @@ def import_sector_data(csv_path=None):
                     'imported_at': datetime.now()
                 }
                 
-                batch.append(doc)
+                filter_key = {'sector_name': sector_name, 'stock_code': code}
+                existing = collection.find_one(filter_key)
+                if existing:
+                    collection.replace_one({'_id': existing['_id']}, doc)
+                    update_count += 1
+                else:
+                    collection.insert_one(doc)
+                    insert_count += 1
                 
-                if len(batch) >= batch_size:
-                    collection.insert_many(batch)
-                    count += len(batch)
-                    batch = []
-                
+                count += 1
             except Exception as e:
                 errors += 1
                 if errors <= 5:
                     print(f"导入行失败: {row} - {e}")
-        
-        # 插入剩余批次
-        if batch:
-            collection.insert_many(batch)
-            count += len(batch)
     
     # 创建索引
     collection.create_index([("sector_name", ASCENDING)])
@@ -98,7 +89,9 @@ def import_sector_data(csv_path=None):
     collection.create_index([("sector_name", ASCENDING), ("stock_code", ASCENDING)], unique=True)
     
     print(f"\n导入完成:")
-    print(f"  成功: {count} 条")
+    print(f"  总计处理: {count} 条")
+    print(f"  新增: {insert_count} 条")
+    print(f"  更新: {update_count} 条")
     print(f"  失败: {errors} 条")
     
     # 验证数据

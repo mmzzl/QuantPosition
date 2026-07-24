@@ -1,0 +1,758 @@
+from datetime import datetime, timedelta, date
+from typing import List, Dict, Any, Optional
+from collections import defaultdict
+
+from services.stock_scorer import StockScorer
+from database import get_db
+
+
+class ReviewService:
+
+    @staticmethod
+    def _determine_position(daily_klines: List[Dict]) -> str:
+        """定大方向：低位(吸筹区) / 中段(洗盘区) / 高位(出货区)"""
+        if len(daily_klines) < 5:
+            return "中段"
+
+        closes = [k["close"] for k in daily_klines]
+        stage_gain = (closes[-1] - closes[0]) / closes[0]
+
+        if stage_gain > 0.50:
+            return "高位"
+        elif stage_gain > 0.15:
+            return "中段"
+        else:
+            return "低位"
+
+    @staticmethod
+    def _analyze_vwap(bars_5m: List[Dict]) -> tuple:
+        if not bars_5m:
+            return "震荡", 0
+
+        total_pv = 0.0
+        total_v = 0.0
+        for bar in bars_5m:
+            typical_price = (bar["high"] + bar["low"] + bar["close"]) / 3
+            vol = bar["volume"]
+            total_pv += typical_price * vol
+            total_v += vol
+
+        vwap = total_pv / total_v if total_v > 0 else bars_5m[-1]["close"]
+
+        above_count = sum(1 for b in bars_5m if b["close"] >= vwap)
+        ratio = above_count / len(bars_5m)
+
+        first_half = bars_5m[:len(bars_5m)//2]
+        second_half = bars_5m[len(bars_5m)//2:]
+        vwap_first = sum(b["close"] for b in first_half) / len(first_half) if first_half else vwap
+        vwap_second = sum(b["close"] for b in second_half) / len(second_half) if second_half else vwap
+        vwap_slope = vwap_second - vwap_first
+
+        if ratio >= 0.65 and vwap_slope > 0:
+            return "强势", vwap
+        elif ratio <= 0.35 and vwap_slope < 0:
+            return "弱势", vwap
+        else:
+            return "震荡", vwap
+
+    @staticmethod
+    def _analyze_volume(bars_5m: List[Dict]) -> tuple:
+        if len(bars_5m) < 10:
+            return "震荡", "数据不足"
+
+        def avg_vol(bars):
+            return sum(b["volume"] for b in bars) / max(len(bars), 1)
+
+        morning_bars = [b for b in bars_5m if b["date"][11:13] in ("09", "10") and b["date"][11:16] <= "10:00"]
+        afternoon_bars = [b for b in bars_5m if "10:05" <= b["date"][11:16] <= "14:00"]
+        tail_bars = [b for b in bars_5m if b["date"][11:16] >= "14:05"]
+
+        morning_vol = avg_vol(morning_bars) if morning_bars else 0
+        afternoon_vol = avg_vol(afternoon_bars) if afternoon_bars else 0
+        tail_vol = avg_vol(tail_bars) if tail_bars else 0
+
+        total_vol = sum(b["volume"] for b in bars_5m)
+        up_vol = sum(b["volume"] for b in bars_5m if b["close"] >= b["open"])
+        down_vol = total_vol - up_vol
+        up_down_ratio = up_vol / max(down_vol, 1)
+        overall_avg_vol = total_vol / max(len(bars_5m), 1)
+
+        up_close = bars_5m[-1]["close"] >= bars_5m[-1]["open"]
+
+        morning_spike = morning_vol > afternoon_vol * 1.5 and afternoon_vol > 0
+        spike_closes = [b["close"] for b in bars_5m[:5]]
+        early_rising = len(spike_closes) >= 2 and max(spike_closes) > spike_closes[0]
+
+        if morning_spike and early_rising:
+            spike_avg = avg_vol(bars_5m[:3])
+            retreat_avg = avg_vol(bars_5m[3:8])
+            if retreat_avg < spike_avg * 0.4:
+                return "出货", "早盘放量急拉后缩量回落，量价背离"
+
+        if down_vol > up_vol * 1.5 and tail_vol > overall_avg_vol * 1.3 and not up_close:
+            return "出货", "下跌放量，尾盘放量跳水"
+
+        if up_down_ratio > 1.5 and tail_vol > overall_avg_vol * 1.2 and up_close:
+            return "洗盘", "下跌缩量上涨放量，尾盘放量拉升"
+
+        if len(bars_5m) >= 10:
+            first_third = bars_5m[:len(bars_5m)//3]
+            max_first_vol = max(b["volume"] for b in first_third) if first_third else 0
+            if max_first_vol > overall_avg_vol * 2:
+                peak_close = max(b["close"] for b in first_third)
+                if peak_close > first_third[0]["close"] * 1.03:
+                    after_bars = bars_5m[len(bars_5m)//3:]
+                    after_avg = avg_vol(after_bars) if after_bars else 0
+                    if after_avg < max_first_vol * 0.3:
+                        return "试盘", "盘中突然大单拉升测试抛压"
+
+        return "震荡", "无明显量价背离"
+
+    @staticmethod
+    def _recognize_pattern(bars_5m: List[Dict], vwap_status: str, volume_signal: str) -> str:
+        if len(bars_5m) < 20:
+            return "震荡"
+
+        closes = [b["close"] for b in bars_5m]
+        highs = [b["high"] for b in bars_5m]
+        first_half = closes[:len(closes)//2]
+        second_half = closes[len(closes)//2:]
+        avg_first = sum(first_half) / max(len(first_half), 1)
+        avg_second = sum(second_half) / max(len(second_half), 1)
+
+        tail_bars = bars_5m[-6:]
+        tail_vol_avg = sum(b["volume"] for b in tail_bars) / max(len(tail_bars), 1)
+        overall_vol_avg = sum(b["volume"] for b in bars_5m) / max(len(bars_5m), 1)
+        tail_price_rising = tail_bars[-1]["close"] > tail_bars[0]["close"] if tail_bars else False
+
+        early_high = max(highs[:6]) if len(highs) >= 6 else 0
+        second_peak = max(highs[3:9]) if len(highs) >= 9 else 0
+        has_double_top = early_high > 0 and second_peak > 0 and abs(early_high - second_peak) / max(early_high, 0.01) < 0.03
+
+        if tail_vol_avg > overall_vol_avg * 1.5 and tail_price_rising:
+            return "尾盘抢筹型"
+
+        if vwap_status == "弱势" and volume_signal == "出货":
+            if has_double_top:
+                return "M头分时"
+            if closes[0] > closes[-1] and closes[0] > closes[len(closes)//4] * 1.02:
+                return "高开低走阴跌型"
+            if bars_5m[0]["close"] < bars_5m[min(2, len(bars_5m)-1)]["close"] and closes[-1] < closes[0]:
+                return "早盘脉冲全天回落"
+
+        if volume_signal == "洗盘":
+            if avg_second > avg_first and closes[-1] > closes[0]:
+                return "U型洗盘分时"
+            if avg_second >= avg_first * 1.01 and closes[-1] > closes[0]:
+                return "单边震荡上行"
+
+        if has_double_top:
+            return "M头分时"
+
+        return "震荡平衡形态"
+
+    @staticmethod
+    def _generate_conclusion(position: str, vwap_status: str, volume_signal: str,
+                             pattern: str, tail_signal: str,
+                             main_force: Dict[str, Any] = None) -> Dict[str, str]:
+        intention = (main_force or {}).get("intention", "")
+
+        # ── 主力意图优先 ──
+        if intention == "真出货":
+            return {
+                "conclusion": "卖出",
+                "reason": f"主力真出货：{(main_force or {}).get('intention_detail', '高位派发')}",
+                "strategy": "次日开盘不抱有幻想，小幅冲高即全部卖出，规避日内大跌",
+            }
+
+        if intention == "吸筹":
+            return {
+                "conclusion": "持有",
+                "reason": f"主力吸筹：{(main_force or {}).get('intention_detail', '低位建仓')}",
+                "strategy": "中线看好，缩量回调可加仓，放量滞涨再减仓",
+            }
+
+        if intention == "洗盘":
+            return {
+                "conclusion": "持有",
+                "reason": f"主力洗盘：{(main_force or {}).get('intention_detail', '上涨中继清理浮筹')}",
+                "strategy": "次日只要不有效跌破均价，全程持有，等冲高放量滞涨再分批卖出",
+            }
+
+        if intention == "假出货诱空":
+            return {
+                "conclusion": "持有",
+                "reason": f"诱空假出货：{(main_force or {}).get('intention_detail', '假跳水真洗盘')}",
+                "strategy": "主力故意砸盘吓散户，坚定持有，次日修复可加仓",
+            }
+
+        if intention == "出货风险":
+            return {
+                "conclusion": "卖出",
+                "reason": f"出货风险：{(main_force or {}).get('intention_detail', '中段价量背离')}",
+                "strategy": "次日开盘减仓，观察能否站稳支撑，继续走弱则清仓",
+            }
+
+        if intention == "高位震荡":
+            return {
+                "conclusion": "观望",
+                "reason": "高位+量价尚可，但向上空间有限",
+                "strategy": "轻仓观望，不放量突破前高不加仓",
+            }
+
+        # ── 原有信号逻辑作为兜底 ──
+        sell_signals = 0
+
+        if position == "高位":
+            sell_signals += 1
+        if vwap_status == "弱势":
+            sell_signals += 1
+        if volume_signal == "出货":
+            sell_signals += 1
+        if pattern in ("M头分时", "高开低走阴跌型", "早盘脉冲全天回落"):
+            sell_signals += 1
+        if tail_signal == "放量跳水":
+            sell_signals += 1
+
+        hold_conditions = (
+            position in ("低位", "中段")
+            and vwap_status == "强势"
+            and volume_signal == "洗盘"
+            and pattern in ("U型洗盘分时", "单边震荡上行", "尾盘抢筹型")
+        )
+
+        if hold_conditions:
+            return {
+                "conclusion": "持有",
+                "reason": f"{position}启动+均价支撑+下跌缩量上涨放量+尾盘稳定",
+                "strategy": "次日只要不有效跌破均价，全程持有，等冲高放量滞涨再分批卖出",
+            }
+
+        if sell_signals >= 2:
+            return {
+                "conclusion": "卖出",
+                "reason": "高位 均价弱势 量价背离 出货形态",
+                "strategy": "次日开盘不抱有幻想，小幅冲高即全部卖出，规避日内大跌",
+            }
+
+        return {
+            "conclusion": "观望",
+            "reason": "多空分歧，无明显方向信号",
+            "strategy": "次日减半仓观望，等方向明确后再操作",
+        }
+
+    # ======================== 主力意图 4 层验证框架 ========================
+
+    @staticmethod
+    def _analyze_daily_volume_trend(daily_klines: List[Dict]) -> Dict[str, Any]:
+        """量能辨真假：分析日线级别的量价关系"""
+        if len(daily_klines) < 10:
+            return {"pattern": "数据不足", "up_vol_ratio": 0, "down_vol_shrink": 0, "has_volume_pile": False}
+
+        recent = daily_klines[-20:] if len(daily_klines) >= 20 else daily_klines
+        up_vol = sum(k["volume"] for k in recent if k["close"] >= k["open"])
+        down_vol = sum(k["volume"] for k in recent if k["close"] < k["open"])
+        up_down_ratio = up_vol / max(down_vol, 1)
+
+        up_days = sum(1 for k in recent if k["close"] >= k["open"])
+        down_days = sum(1 for k in recent if k["close"] < k["open"])
+        avg_up_vol = up_vol / max(up_days, 1)
+        avg_down_vol = down_vol / max(down_days, 1)
+        down_shrink_ratio = avg_down_vol / max(avg_up_vol, 1)
+
+        vol_list = [k["volume"] for k in recent]
+        avg_vol = sum(vol_list) / max(len(vol_list), 1)
+        vol_std = (sum((v - avg_vol) ** 2 for v in vol_list) / max(len(vol_list), 1)) ** 0.5
+        vol_pile_threshold = avg_vol + vol_std * 1.5
+        pile_days = sum(1 for v in vol_list if v > vol_pile_threshold and v > avg_vol * 1.8)
+
+        has_volume_pile = pile_days >= 2
+
+        return {
+            "pattern": "吸筹量" if up_down_ratio > 1.3 and down_shrink_ratio < 0.7 and has_volume_pile
+                       else "洗盘量" if down_shrink_ratio < 0.6
+                       else "出货量" if up_down_ratio < 0.7
+                       else "震荡量",
+            "up_vol_ratio": round(up_down_ratio, 2),
+            "down_shrink_ratio": round(down_shrink_ratio, 2),
+            "has_volume_pile": has_volume_pile,
+        }
+
+    @staticmethod
+    def _detect_sequence(daily_klines: List[Dict]) -> List[str]:
+        """识别主力连续动作序列：涨停→洗盘、涨停→出货、连阳吸筹等"""
+        if len(daily_klines) < 6:
+            return []
+        recent = daily_klines[-6:]
+        seq = []
+
+        closes = [k["close"] for k in recent]
+        volumes = [k["volume"] for k in recent]
+        avg_vol = sum(volumes) / max(len(volumes), 1)
+
+        # 计算每日涨跌幅 + 是否涨停
+        gains = []
+        limit_up = [False] * len(recent)
+        for i in range(1, len(recent)):
+            prev = recent[i - 1]
+            cur = recent[i]
+            gain = (cur["close"] - prev["close"]) / max(prev["close"], 0.01)
+            gains.append(gain)
+            limit_up[i] = gain >= 0.095
+
+        # ── 涨停后序列 ──
+        limit_idx = [i for i in range(1, len(recent)) if limit_up[i]]
+        if limit_idx:
+            idx = limit_idx[-1]  # 最近一次涨停
+            days_after = len(recent) - 1 - idx
+            vol_after = sum(volumes[idx+1:]) / max(days_after, 1)
+            vol_ratio = vol_after / max(avg_vol, 1)
+
+            if days_after >= 1:
+                after_gains = gains[idx:]
+                avg_after_gain = sum(after_gains) / max(len(after_gains), 1)
+
+                if avg_after_gain < 0.005 and vol_ratio < 0.8:
+                    seq.append("涨停后缩量")
+                elif avg_after_gain < 0.005 and vol_ratio >= 1.2:
+                    seq.append("涨停后放量滞涨")
+                elif avg_after_gain > 0.02:
+                    seq.append("涨停后继续上攻")
+
+        # ── 连续阳线吸筹 ──
+        up_count = sum(1 for g in gains[-3:] if g > 0)
+        if up_count >= 2:
+            vol_increasing = all(volumes[-3 + i] < volumes[-2 + i] for i in range(2)) if len(volumes) >= 3 else False
+            if vol_increasing:
+                seq.append("量价齐升")
+
+        # ── 连阴缩量洗盘 ──
+        down_count = sum(1 for g in gains[-3:] if g < 0)
+        vol_shrink = all(volumes[-3 + i] >= volumes[-2 + i] for i in range(2)) if len(volumes) >= 3 else False
+        if down_count >= 2 and vol_shrink:
+            seq.append("连阴缩量")
+
+        # ── 高位放量滞涨 ──
+        if len(gains) >= 3:
+            recent_gains = gains[-3:]
+            recent_vols = volumes[-3:]
+            if abs(sum(recent_gains)) < 0.02 and max(recent_vols) > avg_vol * 1.5:
+                seq.append("高位放量滞涨")
+
+        return seq
+
+    @staticmethod
+    def _detect_kline_pattern(daily_klines: List[Dict]) -> List[str]:
+        """识别K线形态：长下影、W底、假破位、避雷针等"""
+        if len(daily_klines) < 10:
+            return []
+        recent = daily_klines[-15:]
+        patterns = []
+
+        closes = [k["close"] for k in recent]
+        highs = [k["high"] for k in recent]
+        lows = [k["low"] for k in recent]
+        opens = [k["open"] for k in recent]
+
+        for i in range(-5, 0):
+            k = recent[i]
+            body = abs(k["close"] - k["open"])
+            lower_shadow = min(k["open"], k["close"]) - k["low"]
+            upper_shadow = k["high"] - max(k["open"], k["close"])
+            if body > 0 and lower_shadow > body * 2:
+                patterns.append("长下影")
+            if body > 0 and upper_shadow > body * 2:
+                patterns.append("避雷针")
+
+        low_10 = min(lows[-10:])
+        low_idx = lows[-10:].index(low_10) if len(lows) >= 10 else 0
+        if 2 < low_idx < 8:
+            before = lows[-10:-10 + low_idx]
+            after = lows[-10 + low_idx + 1:]
+            threshold = low_10 * 1.03
+            near_before = sum(1 for x in before if x <= threshold) if before else 0
+            near_after = sum(1 for x in after if x <= threshold) if after else 0
+            if near_before >= 1 and near_after >= 1:
+                patterns.append("W底")
+
+        if len(closes) >= 3:
+            prev_close = closes[-3]
+            mid_close = closes[-2]
+            last_close = closes[-1]
+            if prev_close > mid_close and last_close > mid_close:
+                if abs(last_close - prev_close) / max(prev_close, 0.01) < 0.03:
+                    patterns.append("假破位")
+
+        return list(set(patterns))
+
+    @staticmethod
+    def _assess_main_force_intention(
+        position: str,
+        daily_klines: List[Dict],
+        vwap_status: str,
+        volume_signal: str,
+        pattern: str,
+        tail_signal: str,
+    ) -> Dict[str, Any]:
+        """
+        4层验证确定主力意图：吸筹 / 洗盘 / 假出货(诱空) / 真出货 / 震荡
+
+        位置定大方向 → 量能辨真假 → K线/筹码看底仓 → 盘口拆演戏
+        """
+        vol_trend = ReviewService._analyze_daily_volume_trend(daily_klines)
+        daily_patterns = ReviewService._detect_kline_pattern(daily_klines)
+        sequences = ReviewService._detect_sequence(daily_klines)
+
+        intention = "震荡"
+        detail_parts = []
+        confidence = "低"
+
+        # ── Layer 1: 位置定大方向 ──
+        if position == "低位":
+            # Layer 2: 量能验证
+            has_seq_accum = "量价齐升" in sequences
+            if vol_trend["pattern"] == "吸筹量" or has_seq_accum:
+                intention = "吸筹"
+                detail_parts.append("低位+上涨放量下跌缩量")
+                confidence = "中"
+                if vol_trend["has_volume_pile"]:
+                    detail_parts.append("持续量堆")
+                    confidence = "高"
+                if has_seq_accum:
+                    detail_parts.append("量价齐升")
+                    confidence = "高"
+                if "长下影" in daily_patterns or "W底" in daily_patterns:
+                    detail_parts.append("底部形态")
+                    confidence = "高"
+            elif volume_signal == "洗盘" and vwap_status == "强势":
+                intention = "吸筹"
+                detail_parts.append("低位+今日洗盘企稳")
+                confidence = "中"
+
+        elif position == "中段":
+            # Layer 2+4: 量能 + 盘口验证
+            has_recovery_pattern = "假破位" in daily_patterns or "长下影" in daily_patterns
+
+            # 隔日验证：昨天大跌 + 今天企稳 → 假出货
+            yest_drop_recovery = False
+            if len(daily_klines) >= 3:
+                d2 = daily_klines[-3]  # 前天
+                d1 = daily_klines[-2]  # 昨天
+                d0 = daily_klines[-1]  # 今天
+                yest_drop = (d1["close"] - d2["close"]) / max(d2["close"], 0.01) < -0.02
+                today_recover = (d0["close"] - d1["close"]) / max(d1["close"], 0.01) > 0.01
+                yest_drop_recovery = yest_drop and today_recover
+
+            is_wash = (
+                volume_signal in ("洗盘", "试盘")
+                and vwap_status != "弱势"
+                and tail_signal != "放量跳水"
+            )
+
+            has_seq_wash = "涨停后缩量" in sequences or "连阴缩量" in sequences
+            has_seq_dist = "涨停后放量滞涨" in sequences or "高位放量滞涨" in sequences
+            has_seq_strong = "涨停后继续上攻" in sequences
+
+            if volume_signal == "出货":
+                has_bearish_pattern = pattern in ("M头分时", "高开低走阴跌型", "早盘脉冲全天回落")
+                if has_recovery_pattern or yest_drop_recovery:
+                    intention = "假出货诱空"
+                    parts = ["中段+出货假象"]
+                    if yest_drop_recovery:
+                        parts.append("昨大跌今企稳")
+                    if has_recovery_pattern:
+                        parts.append("形态修复")
+                    detail_parts.extend(parts)
+                    confidence = "高" if (vwap_status != "弱势" and yest_drop_recovery) else "中"
+                    if "长下影" in daily_patterns:
+                        detail_parts.append("长下影确认支撑")
+                elif has_seq_dist:
+                    intention = "出货风险"
+                    detail_parts.append("中段+连续放量滞涨")
+                    confidence = "中"
+                elif has_bearish_pattern or vwap_status == "弱势":
+                    intention = "出货风险" if vwap_status == "弱势" else "假出货诱空"
+                    detail_parts.append("中段+价量背离")
+                    confidence = "中"
+                else:
+                    intention = "假出货诱空"
+                    detail_parts.append("中段+出货信号不清")
+                    confidence = "低"
+            elif is_wash or has_seq_wash:
+                intention = "洗盘"
+                detail_parts.append("中段+缩量回调")
+                confidence = "中"
+                if has_seq_wash:
+                    detail_parts.append(sequences[0] if sequences else "连续缩量")
+                    confidence = "高"
+                if vol_trend["pattern"] == "洗盘量" or vol_trend["down_shrink_ratio"] < 0.6:
+                    detail_parts.append("量能萎缩主力惜售")
+                    confidence = "高"
+                if vwap_status == "强势":
+                    detail_parts.append("均价支撑")
+                    confidence = "高"
+            elif has_seq_strong:
+                intention = "吸筹"
+                detail_parts.append("中段+涨停后继续上攻")
+                confidence = "高"
+
+        elif position == "高位":
+            has_seq_high_dist = "高位放量滞涨" in sequences or "涨停后放量滞涨" in sequences
+            is_real_dist = (
+                volume_signal == "出货"
+                or vwap_status == "弱势"
+                or pattern in ("M头分时", "高开低走阴跌型", "早盘脉冲全天回落")
+                or tail_signal == "放量跳水"
+                or "避雷针" in daily_patterns
+                or has_seq_high_dist
+            )
+            if is_real_dist:
+                intention = "真出货"
+                detail_parts.append("高位+主力派发信号")
+                confidence = "高"
+                if vol_trend["pattern"] == "出货量":
+                    detail_parts.append("阴量放大")
+                if tail_signal == "放量跳水":
+                    detail_parts.append("尾盘跳水无承接")
+            else:
+                intention = "高位震荡"
+                detail_parts.append("高位+量价尚可")
+                confidence = "低"
+
+        # 无明确结论的兜底
+        if intention == "震荡":
+            if "量价齐升" in sequences:
+                intention = "吸筹"
+                detail_parts.append("量价齐升")
+                confidence = "中"
+            elif "涨停后继续上攻" in sequences:
+                intention = "吸筹"
+                detail_parts.append("涨停后继续上攻")
+                confidence = "高"
+            elif "连阴缩量" in sequences and position in ("低位", "中段"):
+                intention = "洗盘"
+                detail_parts.append("连阴缩量洗盘")
+                confidence = "中"
+            elif position in ("低位", "中段") and vwap_status == "强势" and volume_signal != "出货":
+                intention = "洗盘" if position == "中段" else "吸筹"
+                detail_parts.append(f"{position}+均线支撑")
+                confidence = "低"
+
+        intention_detail = "，".join(detail_parts) if detail_parts else "信号不明确"
+
+        return {
+            "intention": intention,
+            "intention_detail": intention_detail,
+            "intention_confidence": confidence,
+            "daily_vol_pattern": vol_trend["pattern"],
+            "daily_patterns": daily_patterns,
+        }
+
+    # ======================== 原有方法保持不变 ========================
+
+    @staticmethod
+    def _get_daily_klines(code: str, days: int = 60) -> List[Dict]:
+        from database import get_db
+        from datetime import timedelta
+        db = get_db()
+        now = datetime.now()
+        start = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+        end = now.strftime("%Y-%m-%d") + " 23:59"
+        return list(db.stock_kline.find({
+            "code": code,
+            "frequency": 9,
+            "date": {"$gte": start, "$lte": end}
+        }).sort("date", 1))
+
+    @staticmethod
+    def _get_5m_klines(code: str, date_str: str) -> List[Dict]:
+        from database import get_db
+        db = get_db()
+        return list(db.stock_kline_5m.find({
+            "code": code,
+            "date": {"$gte": f"{date_str} 00:00", "$lte": f"{date_str} 23:59"}
+        }).sort("date", 1))
+
+    @staticmethod
+    def analyze(code: str, name: str, date_str: str = None) -> Dict[str, Any]:
+        if date_str is None:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+        daily_klines = ReviewService._get_daily_klines(code)
+        bars_5m = ReviewService._get_5m_klines(code, date_str)
+        if not bars_5m:
+            return StockScorer.unify(
+                {"code": code, "name": name, "date": date_str,
+                 "total": 0, "level": "C",
+                 "breakdown": {
+                     "price_volume": {"total": 0, "breakdown": {}},
+                     "fund_chip": {"total": 0, "breakdown": {}},
+                     "sector_theme": {"total": 0, "breakdown": {}},
+                     "risk": {"total": 0, "breakdown": {}},
+                 }},
+                conclusion="跳过",
+                strategy=f"{date_str} 无 5 分钟 K 线数据",
+            )
+
+        position = ReviewService._determine_position(daily_klines)
+        vwap_status, vwap = ReviewService._analyze_vwap(bars_5m)
+        volume_signal, vol_detail = ReviewService._analyze_volume(bars_5m)
+        pattern = ReviewService._recognize_pattern(bars_5m, vwap_status, volume_signal)
+
+        tail_bars = bars_5m[-6:]
+        tail_vol = sum(b["volume"] for b in tail_bars)
+        overall_avg_vol = sum(b["volume"] for b in bars_5m) / max(len(bars_5m), 1)
+        if tail_vol > len(tail_bars) * overall_avg_vol * 1.5 and tail_bars[-1]["close"] > tail_bars[0]["close"]:
+            tail_signal = "抢筹"
+        elif tail_vol > len(tail_bars) * overall_avg_vol * 1.5 and tail_bars[-1]["close"] < tail_bars[0]["close"]:
+            tail_signal = "放量跳水"
+        else:
+            tail_signal = "无量横盘"
+
+        # 主力意图 4层验证
+        main_force = ReviewService._assess_main_force_intention(
+            position, daily_klines, vwap_status, volume_signal, pattern, tail_signal
+        )
+        conclusion = ReviewService._generate_conclusion(
+            position, vwap_status, volume_signal, pattern, tail_signal, main_force
+        )
+
+        scorer = StockScorer()
+        score_result = scorer.score(code, name, date_str)
+        intention_info = {
+            "intention": main_force["intention"],
+            "bonus": StockScorer.INTENTION_BONUS.get(main_force["intention"], 0),
+            "confidence": main_force["intention_confidence"],
+            "detail": main_force["intention_detail"],
+        }
+        result = StockScorer.unify(
+            score_result, intention_info,
+            conclusion["conclusion"], conclusion["strategy"]
+        )
+        result["position"] = position
+        result["vwap_status"] = vwap_status
+        result["volume_signal"] = volume_signal
+        result["volume_detail"] = vol_detail
+        result["pattern"] = pattern
+        result["tail_signal"] = tail_signal
+        result["daily_vol_pattern"] = main_force["daily_vol_pattern"]
+        result["daily_patterns"] = main_force["daily_patterns"]
+        return result
+
+    @staticmethod
+    def _4layer_verification(code: str) -> Dict[str, Any]:
+        daily_klines = ReviewService._get_daily_klines(code)
+        bars_5m = ReviewService._get_5m_klines(code, date.today().strftime("%Y-%m-%d"))
+        if not bars_5m:
+            return {"intention": "数据不足", "intention_confidence": "低", "intention_detail": "无分时数据"}
+        position = ReviewService._determine_position(daily_klines)
+        vwap_status, vwap = ReviewService._analyze_vwap(bars_5m)
+        volume_signal, vol_detail = ReviewService._analyze_volume(bars_5m)
+        pattern = ReviewService._recognize_pattern(bars_5m, vwap_status, volume_signal)
+        tail_bars = bars_5m[-6:]
+        overall_avg_vol = sum(b["volume"] for b in bars_5m) / max(len(bars_5m), 1)
+        if tail_bars and sum(b["volume"] for b in tail_bars) > len(tail_bars) * overall_avg_vol * 1.5:
+            tail_signal = "抢筹" if tail_bars[-1]["close"] > tail_bars[0]["close"] else "放量跳水"
+        else:
+            tail_signal = "无量横盘"
+        return ReviewService._assess_main_force_intention(
+            position, daily_klines, vwap_status, volume_signal, pattern, tail_signal
+        )
+
+    @staticmethod
+    def _get_industry_for(code: str) -> str:
+        StockScorer._load_industry_cache()
+        pure = code.split(".")[-1] if "." in code else code
+        if StockScorer._industry_cache:
+            return StockScorer._industry_cache.get(pure, "未知")
+        return "未知"
+
+    @staticmethod
+    def generate_review(date_str: str = None) -> Dict[str, Any]:
+        if date_str is None:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+        db = get_db()
+
+        holdings = list(db.holdings.find({}, {"code": 1, "name": 1, "_id": 0}))
+        buy_alerts = list(db.alert_log.find({
+            "trigger_type": "buy", "date": date_str
+        }, {"code": 1, "_id": 0}))
+
+        seen = set()
+        targets = []
+        for h in holdings:
+            code = h.get("code", "")
+            if code and code not in seen:
+                seen.add(code)
+                targets.append({"code": code, "name": h.get("name", "")})
+        for a in buy_alerts:
+            code = a.get("code", "")
+            if code and code not in seen:
+                seen.add(code)
+                targets.append({"code": code, "name": ""})
+
+        results = []
+        for t in targets:
+            try:
+                r = ReviewService.analyze(t["code"], t["name"], date_str)
+                results.append(r)
+            except Exception:
+                pass
+
+        top_stocks = sorted(
+            [r for r in results if r.get("total_score", 0) > 0],
+            key=lambda x: x["total_score"], reverse=True
+        )[:10]
+
+        sector_groups = defaultdict(list)
+        for r in top_stocks:
+            ind = ReviewService._get_industry_for(r.get("code", ""))
+            sector_groups[ind].append(r["total_score"])
+
+        sector_data = []
+        for sname, scores in sorted(sector_groups.items(), key=lambda x: sum(x[1]) / max(len(x[1]), 1), reverse=True):
+            sector_data.append({
+                "sector_name": sname,
+                "avg_score": round(sum(scores) / len(scores), 1),
+                "stock_count": len(scores),
+                "top_stocks": [],
+            })
+
+        total_holdings = len(holdings)
+        hold_count = sum(1 for r in results if r.get("conclusion") == "持有")
+        sell_count = sum(1 for r in results if r.get("conclusion") == "卖出")
+        skip_count = sum(1 for r in results if r.get("conclusion") == "跳过")
+
+        summary_parts = [
+            f"复盘 {date_str}，分析 {total_holdings} 只持仓+{len(buy_alerts)} 只推荐",
+            f"持有信号 {hold_count} 只，卖出信号 {sell_count} 只，跳过 {skip_count} 只",
+        ]
+        if top_stocks:
+            summary_parts.append(f"评分 Top 1: {top_stocks[0]['code']} {top_stocks[0]['name']} ({top_stocks[0]['total_score']}分)")
+
+        report = {
+            "date": date_str,
+            "generated_at": datetime.now().isoformat(),
+            "summary": " | ".join(summary_parts),
+            "top_stocks": [
+                {
+                    "code": r["code"], "name": r["name"],
+                    "score": r.get("total_score", 0), "grade": r.get("grade", "C"),
+                    "conclusion": r.get("conclusion", ""),
+                    "pattern": r.get("pattern", ""),
+                    "intention": r.get("main_force_intention", ""),
+                    "reason": r.get("intention_detail", ""),
+                    "strategy": r.get("strategy", ""),
+                }
+                for r in top_stocks
+            ],
+            "sector_analysis": sector_data,
+            "holdings_analyzed": total_holdings,
+            "total_scored": len(results),
+        }
+
+        db.review_reports.update_one(
+            {"date": date_str},
+            {"$set": report},
+            upsert=True,
+        )
+        return report

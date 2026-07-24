@@ -30,11 +30,21 @@ class RuleService:
         return r
 
     @staticmethod
+    def _next_id():
+        """原子自增 rule_id"""
+        db = get_db()
+        counter = db.rule_id_counter.find_one_and_update(
+            {"_id": "rule_id"},
+            {"$inc": {"seq": 1}},
+            upsert=True,
+            return_document=True
+        )
+        return counter["seq"]
+
+    @staticmethod
     def create_rule(data: Dict[str, Any]) -> Dict:
         db = get_db()
-        # auto-increment rule_id
-        last = db[RuleService.COLLECTION].find_one(sort=[("rule_id", -1)])
-        new_id = (last["rule_id"] + 1) if last else 1
+        new_id = RuleService._next_id()
 
         doc = {
             "rule_id": new_id,

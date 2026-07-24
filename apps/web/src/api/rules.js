@@ -32,12 +32,12 @@ export function getExploreStatus() {
   return http.get('/rules/explore/status')
 }
 
-export function startExplore() {
-  return http.post('/rules/explore')
+export function startExplore(phases = ['template', 'llm', 'genetic']) {
+  return http.post('/rules/explore', { phases })
 }
 
-export function startValidateCandidates(scope = 'all', limit = 500) {
-  return http.post('/rules/validate-candidates', { scope, limit })
+export function startValidateCandidates(scope = 'all', limit = 500, backtest_days = 360, max_stocks = 500) {
+  return http.post('/rules/validate-candidates', { scope, limit, backtest_days, max_stocks })
 }
 
 export function applyCandidates() {
@@ -62,6 +62,10 @@ export function getBlacklist(params = {}) {
 
 export function deleteBlacklist(id) {
   return http.delete(`/rules/blacklist/${id}`)
+}
+
+export function applyCandidate(id) {
+  return http.post(`/rules/candidates/${id}/apply`)
 }
 
 export function getBackups() {
