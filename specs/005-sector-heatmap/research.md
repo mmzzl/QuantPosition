@@ -4,17 +4,18 @@
 
 **Context**: MongoDB中K线数据的字段结构
 
-**Decision**: 假设K线数据存储在 `kline_data` 集合中，字段结构为：
+**Decision**: 假设K线数据存储在 `stock_kline` 集合中，字段结构为：
 ```json
 {
-  "code": "sh.600000",
+  "code": "600000",
   "date": "2026-05-16",
   "open": 9.00,
   "close": 9.07,
   "high": 9.22,
   "low": 8.93,
   "volume": 171982587,
-  "amount": 1559276666.00
+  "amount": 1559276666.00,
+  "frequency": 9
 }
 ```
 

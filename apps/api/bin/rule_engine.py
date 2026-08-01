@@ -3,8 +3,8 @@ import json
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import socket
 import logging
+import time
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
 from systems.logs import Log
@@ -12,17 +12,45 @@ from systems.logs import Log
 logger = logging.getLogger(__name__)
 from systems.single import ScriptSingle
 from systems.sys import home
-from services.stock_scorer import StockScorer
-
-
-
 
 from services.notification_service import send_dingtalk_message
+from services.scoring.oversold_bounce import oversold_bounce_score, score_detail
+
+
+# Mongo query retry count (spec REQ-003 exception table: retry 3 times)
+MONGO_RETRY = 3
+# Failure ratio threshold (spec REQ-003 exception table: >=10% aborts)
+FAILURE_ABORT_RATIO = 0.10
+
+
+def _mongo_find_with_retry(db, collection, query, projection=None, sort=None):
+    """MongoDB query with retry. Returns list. Raises after MONGO_RETRY failures."""
+    last_exc = None
+    for attempt in range(MONGO_RETRY):
+        try:
+            cur = db[collection].find(query, projection) if projection else db[collection].find(query)
+            if sort:
+                cur = cur.sort(*sort) if isinstance(sort, tuple) else cur.sort(sort)
+            return list(cur)
+        except Exception as e:
+            last_exc = e
+            logging.warning(f"[RULE_ENGINE] Mongo {collection} attempt {attempt+1}/{MONGO_RETRY} failed: {e}")
+            if attempt < MONGO_RETRY - 1:
+                time.sleep(5)
+    raise last_exc if last_exc else RuntimeError("mongo query failed")
 
 
 class StockRuleEngine:
     def __init__(self, rules: List[Dict]):
         self.rules = sorted(rules, key=lambda r: r.get("priority", 99))
+        self._compiled = []
+        for rule in self.rules:
+            try:
+                code = compile(rule["condition"], "<rule>", "eval")
+                self._compiled.append((rule, code))
+            except SyntaxError as e:
+                logging.error(f"规则编译失败: {e}, 规则: {rule.get('name', '')}")
+                self._compiled.append((rule, None))
 
     def run(self, ctx: dict) -> tuple:
         risk_triggered = False
@@ -30,13 +58,13 @@ class StockRuleEngine:
         buy_score = 0.0
         triggered_rules = []
 
-        for rule in self.rules:
-            if not rule.get("enabled", True):
+        for rule, code in self._compiled:
+            if not rule.get("enabled", True) or code is None:
                 continue
             try:
-                ok = bool(eval(rule["condition"], {"__builtins__": {}}, ctx))
+                ok = bool(eval(code, {"__builtins__": {}}, ctx))
             except Exception as e:
-                logging.error(f"规则执行错误: {e}, 规则: {rule['name']}")
+                logging.error(f"规则执行错误: {e}, 规则: {rule.get('name', '')}")
                 continue
             if ok:
                 triggered_rules.append(rule)
@@ -150,7 +178,6 @@ def calc_adx(highs, lows, closes, period=14):
         plus_dms.append(up_move if up_move > down_move and up_move > 0 else 0)
         minus_dms.append(down_move if down_move > up_move and down_move > 0 else 0)
 
-    # Wilder's smooth TR, +DM, -DM
     s_tr = sum(trs[:period]) / period
     s_pdm = sum(plus_dms[:period]) / period
     s_mdm = sum(minus_dms[:period]) / period
@@ -169,7 +196,6 @@ def calc_adx(highs, lows, closes, period=14):
     if len(dxs) < period:
         return round(dxs[-1], 1) if dxs else 25
 
-    # Wilder's smooth ADX
     adx = sum(dxs[:period]) / period
     for i in range(period, len(dxs)):
         adx = (adx * (period - 1) + dxs[i]) / period
@@ -177,15 +203,15 @@ def calc_adx(highs, lows, closes, period=14):
 
 
 def load_stock_klines(db, codes, days=60):
-    """批量加载K线数据"""
+    """批量加载K线数据 (含 Mongo 重试)"""
     now = datetime.now()
     start_str = (now - timedelta(days=days)).strftime("%Y-%m-%d")
     end_str = now.strftime("%Y-%m-%d") + " 23:59"
-    klines_raw = list(db.stock_kline.find({
-        "code": {"$in": codes},
-        "frequency": 9,
-        "date": {"$gte": start_str, "$lte": end_str}
-    }).sort("date", 1))
+    klines_raw = _mongo_find_with_retry(
+        db, "stock_kline",
+        {"code": {"$in": codes}, "frequency": 9, "date": {"$gte": start_str, "$lte": end_str}},
+        sort=("date", 1),
+    )
     stock_klines = {}
     for k in klines_raw:
         stock_klines.setdefault(k["code"], []).append(k)
@@ -193,7 +219,10 @@ def load_stock_klines(db, codes, days=60):
 
 
 def build_stock_indicators(klines):
-    """从K线数据计算技术指标，返回 stock_data 字典"""
+    """从K线数据计算技术指标，返回 stock_data 字典
+
+    Note: high20 key uses 'high' field (20-day high) -> caller passes 'high' key for high20.
+    """
     closes = [k["close"] for k in klines]
     volumes = [k["volume"] for k in klines]
     highs = [k["high"] for k in klines]
@@ -228,11 +257,19 @@ def build_stock_indicators(klines):
     }, atr
 
 
-def filter_trend_up(db, exclude_codes=None):
-    """全市场扫描，排除ST，双均线过滤趋势向上（MA5 > MA10 且 MA5 上升）"""
-    exclude_codes = exclude_codes or set()
+def suggest_prices(stock_data, atr):
+    """基于 ATR 动态计算建议买入/卖出价格"""
+    close = stock_data["close"]
+    atr_pct = atr / close if close > 0 else 0.03
+    mult = max(0.3, min(3.0, 0.03 / atr_pct)) if atr_pct > 0 else 1.0
+    buy_price = round(close - atr * mult, 2)
+    sell_price = round(close + atr * mult, 2)
+    stop_loss = round(close - 2 * atr * mult, 2)
+    return buy_price, sell_price, stop_loss
 
-    # 获取所有非ST股票代码
+
+def _load_all_market_stocks(db, exclude_codes: set):
+    """全市场扫描非 ST 股票代码与名称映射 (使用 sector_stocks)"""
     name_map = {}
     for s in db.sector_stocks.find({}, {"stock_code": 1, "stock_name": 1}):
         code = s.get("stock_code", "").split(".")[-1]
@@ -244,56 +281,17 @@ def filter_trend_up(db, exclude_codes=None):
     non_st = [c for c in all_codes
               if c not in exclude_codes
               and not name_map.get(c, "").startswith(("ST", "*ST"))
-              and not c.startswith(("300", "301", "688"))]  # 排除创业板和科创板
-
+              and not c.startswith(("300", "301", "688"))]
     logging.info(f"[RULE_ENGINE] 全市场非ST股票: {len(non_st)} 只")
-
-    # 批量加载K线
-    stock_klines = load_stock_klines(db, non_st)
-
-    # 双均线过滤：MA5 > MA10 且 MA5 连续3天上升
-    trend_up = []
-    for code, klines in stock_klines.items():
-        if len(klines) < 20:
-            continue
-        closes = [k["close"] for k in klines]
-        ma5_now = calc_sma(closes, 5)
-        ma10_now = calc_sma(closes, 10)
-        # MA5 > MA10 表示短期趋势向上
-        if ma5_now <= ma10_now:
-            continue
-        # 检查 MA5 是否在上升（最近3天）
-        if len(closes) >= 8:
-            ma5_3d_ago = sum(closes[-8:-3]) / 5
-            if ma5_now <= ma5_3d_ago:
-                continue
-        trend_up.append(code)
-
-    logging.info(f"[RULE_ENGINE] 趋势向上（MA5>MA10且上升）: {len(trend_up)} 只")
-    return trend_up, stock_klines, name_map
-
-
-def suggest_prices(stock_data, atr):
-    """基于 ATR 动态计算建议买入/卖出价格
-    按 ATR% 自动调整倍数：波动率低时多倍ATR，波动率高时少倍ATR
-    目标：买卖价差稳定在 ~3%，止损失在 ~6%
-    """
-    close = stock_data["close"]
-    atr_pct = atr / close if close > 0 else 0.03
-    mult = max(0.3, min(3.0, 0.03 / atr_pct)) if atr_pct > 0 else 1.0
-    buy_price = round(close - atr * mult, 2)
-    sell_price = round(close + atr * mult, 2)
-    stop_loss = round(close - 2 * atr * mult, 2)
-    return buy_price, sell_price, stop_loss
+    return non_st, name_map
 
 
 def run_rules_for_holdings():
     """从 MongoDB 获取持仓和 K 线数据，执行所有启用规则
 
-    持仓 → has_pos=True（评估卖出/风控）
-    全市场 → 排除ST → 双均线过滤 → has_pos=False（评估买入）
-
-    买入信号按评分排序，只推送最高分的那只
+    持仓 -> has_pos=True（评估卖出/风控）
+    全市场 -> 排除ST -> has_pos=False（评估买入）
+    买入信号按 oversold_bounce_score 排序，只推送最高分的那只
     """
     import sys
     import os
@@ -316,14 +314,18 @@ def run_rules_for_holdings():
     holding_map = {h["code"]: h for h in holdings}
     logging.info(f"持仓数量: {len(holding_codes)}")
 
-    # 3. 买入候选池：全市场扫描 + 双均线过滤
+    # 3. 候选池：全市场扫描，不再做双均线预过滤 (spec REQ-003)
     stock_klines_all = {}
     name_map = {}
     if has_buy_rule:
-        trend_up_codes, stock_klines_all, name_map = filter_trend_up(db, exclude_codes=holding_codes)
-        logging.info(f"买入候选池: {len(trend_up_codes)} 只（趋势向上，排除持仓）")
+        non_st_codes, name_map = _load_all_market_stocks(db, exclude_codes=holding_codes)
+        try:
+            stock_klines_all = load_stock_klines(db, non_st_codes)
+        except Exception as e:
+            logging.error(f"[RULE_ENGINE] 全市场K线加载失败: {e}")
+            return
+        logging.info(f"买入候选池: {len(non_st_codes)} 只（全市场，排除持仓/ST）")
     else:
-        # 没有买入规则时，只需加载持仓股票的K线
         if holdings:
             stock_klines_all = load_stock_klines(db, list(holding_codes))
             for s in db.sector_stocks.find({}, {"stock_code": 1, "stock_name": 1}):
@@ -334,24 +336,28 @@ def run_rules_for_holdings():
     # 4. 合并所有需要扫描的股票代码
     all_codes = list(holding_codes)
     if has_buy_rule:
-        all_codes = list(set(all_codes) | set(trend_up_codes))
+        all_codes = list(set(all_codes) | set(stock_klines_all.keys()))
     if not all_codes:
         logging.info("没有股票需要扫描")
         return
 
-    # 5. 补充持仓股票的K线数据（如果没有加载过）
+    # 5. 补充持仓股票的 K 线数据（如果没有加载过）
     missing_codes = [c for c in holding_codes if c not in stock_klines_all]
     if missing_codes:
-        extra_klines = load_stock_klines(db, missing_codes)
-        stock_klines_all.update(extra_klines)
+        try:
+            extra_klines = load_stock_klines(db, missing_codes)
+            stock_klines_all.update(extra_klines)
+        except Exception as e:
+            logging.error(f"[RULE_ENGINE] 持仓K线补充加载失败: {e}")
 
     engine = StockRuleEngine(rules)
-    buy_candidates = []   # 存放所有买入信号，用于排序
-    sell_messages = []    # 存放卖出/风控信号
+    buy_candidates = []
+    sell_messages = []
     pending_alerts = []
 
-    # 6. 执行规则扫描
+    # 6. 执行规则扫描 (with 失败计数与 10% 阈值终止)
     total = len(all_codes)
+    failed_count = 0
     for idx, code in enumerate(all_codes, 1):
         if idx % 200 == 0 or idx == 1 or idx == total:
             logging.info(f"[RULE_ENGINE] 扫描进度: {idx}/{total}")
@@ -364,6 +370,8 @@ def run_rules_for_holdings():
             stock_data, atr = build_stock_indicators(klines)
             stock_data["name"] = name_map.get(code, "")
             is_holding = code in holding_map
+
+            today_str = datetime.now().strftime("%Y-%m-%d")
 
             if is_holding:
                 # 持仓股票：只执行卖出/风控规则
@@ -379,7 +387,6 @@ def run_rules_for_holdings():
                 if not triggered:
                     continue
 
-                today_str = datetime.now().strftime("%Y-%m-%d")
                 rule_ids = sorted(r["rule_id"] for r in triggered)
                 dedup_key = f"{code}|{today_str}|{rule_ids}"
 
@@ -427,7 +434,7 @@ def run_rules_for_holdings():
                     })
 
             else:
-                # 非持仓股票：只执行买入规则
+                # 非持仓股票：只执行买入规则 → 评分函数排序
                 position = {"has_pos": False, "cost": 0, "buy_date": None}
                 ctx = engine.build_context(stock_data, position)
                 risk, sell_sc, buy_sc, triggered = engine.run(ctx)
@@ -435,7 +442,23 @@ def run_rules_for_holdings():
                 if buy_sc <= 0 or not triggered:
                     continue
 
-                today_str = datetime.now().strftime("%Y-%m-%d")
+                # 统一评分 (spec REQ-003)
+                s = oversold_bounce_score(
+                    close=stock_data.get("close", 0),
+                    ma5=stock_data.get("ma5", 0),
+                    ma10=stock_data.get("ma10", 0),
+                    ma20=stock_data.get("ma20", 0),
+                    ma60=stock_data.get("ma60", 0),
+                    volume=stock_data.get("volume", 0),
+                    ma5_vol=stock_data.get("ma5_vol", 0),
+                    high20=stock_data.get("high", 0),
+                    amplitude=stock_data.get("amplitude", 0),
+                    is_st=bool(stock_data.get("name", "").startswith(("ST", "*ST"))),
+                )
+                # 评分 <= 0 (剔除/0分) 不进入候选 (spec REQ-003 AC)
+                if s <= 0:
+                    continue
+
                 rule_ids = sorted(r["rule_id"] for r in triggered)
                 dedup_key = f"{code}|{today_str}|{rule_ids}"
 
@@ -444,11 +467,25 @@ def run_rules_for_holdings():
 
                 rule_names = ", ".join(r["name"] for r in triggered)
                 buy_price, sell_price, stop_loss = suggest_prices(stock_data, atr)
+                detail = score_detail(
+                    close=stock_data.get("close", 0),
+                    ma5=stock_data.get("ma5", 0),
+                    ma10=stock_data.get("ma10", 0),
+                    ma20=stock_data.get("ma20", 0),
+                    ma60=stock_data.get("ma60", 0),
+                    volume=stock_data.get("volume", 0),
+                    ma5_vol=stock_data.get("ma5_vol", 0),
+                    high20=stock_data.get("high", 0),
+                    amplitude=stock_data.get("amplitude", 0),
+                    is_st=bool(stock_data.get("name", "").startswith(("ST", "*ST"))),
+                )
 
                 buy_candidates.append({
                     "code": code,
                     "name": stock_data["name"],
                     "buy_score": buy_sc,
+                    "unified_score": s,
+                    "score_detail": detail,
                     "price": stock_data["close"],
                     "atr": atr,
                     "buy_price": buy_price,
@@ -457,42 +494,33 @@ def run_rules_for_holdings():
                     "rule_names": rule_names,
                     "rule_ids": rule_ids,
                     "dedup_key": dedup_key,
-                    "stock_data": stock_data,
                     "triggered": triggered,
                 })
         except Exception as e:
+            failed_count += 1
             logging.warning(f"[RULE_ENGINE] 跳过 {code}（{name_map.get(code, '')}）处理异常: {e}")
+            # spec REQ-003 exception table: 失败股票 >= 10% 终止本轮推荐
+            if total > 0 and failed_count / total >= FAILURE_ABORT_RATIO:
+                logging.error(
+                    f"[RULE_ENGINE] 失败比例 {failed_count}/{total} >= {FAILURE_ABORT_RATIO:.0%}，终止本轮推荐"
+                )
+                return
 
-    # 7. 买入信号评分 + 排序，只保留最高分
+    # 7. 买入信号按统一评分排序 (spec REQ-003: 按 oversold_bounce_score 降序)
     best = None
     if buy_candidates:
-        socket.setdefaulttimeout(30)
-        scorer = StockScorer()
-        total_candidates = len(buy_candidates)
-        for i, c in enumerate(buy_candidates, 1):
-            logging.info(f"[RULE_ENGINE] 评分进度: {i}/{total_candidates} {c['code']} {c.get('name', '')}")
-            try:
-                result = scorer.score(c["code"], c.get("name", ""))
-                c["scorer_score"] = result["total"]
-                c["scorer_level"] = result["level"]
-            except Exception as e:
-                logging.warning(f"[RULE_ENGINE] {c['code']} 评分异常: {e}")
-                c["scorer_score"] = -1
-                c["scorer_level"] = "C"
-
-        buy_candidates = [c for c in buy_candidates if c["scorer_score"] >= 0]
-        buy_candidates.sort(key=lambda x: x["scorer_score"], reverse=True)
+        buy_candidates.sort(key=lambda x: -x["unified_score"])
         best = buy_candidates[0] if buy_candidates else None
-
-        if best["scorer_score"] < 60:
-            logging.info(f"Best candidate {best['code']} {best['name']} score={best['scorer_score']} < 60,skipping")
-            buy_candidates = []
-            best = None
+        logging.info(f"候选买入信号 {len(buy_candidates)} 只，最高分: "
+                     f"{best['code']} {best['name']} score={best['unified_score']:.2f}")
 
     if best:
+        detail = best["score_detail"]
         msg = (
             f"📈 **买入信号** {best['code']} {best['name']}\n"
-            f"**短线评分**: {best['scorer_score']:.0f}分（等级{best['scorer_level']}）\n"
+            f"**统一评分**: {best['unified_score']:.0f}分"
+            f"（BIAS5={detail['bias5']} 趋势={detail['trend']} "
+            f"板块={detail['sector']} 情绪={detail['sentiment']}）\n"
             f"**触发规则**: {best['rule_names']}\n"
             f"**当前价**: {best['price']:.2f}\n"
             f"**建议买入价**: {best['buy_price']:.2f}（当前价 - ATR）\n"
@@ -505,11 +533,11 @@ def run_rules_for_holdings():
             "dedup_key": best["dedup_key"], "code": best["code"],
             "date": today_str, "rule_ids": best["rule_ids"],
             "rule_names": best["rule_names"], "trigger_type": "buy",
-            "sell_score": 0, "buy_score": round(best["scorer_score"], 2),
+            "sell_score": 0, "buy_score": round(best["unified_score"], 2),
+            "score_detail": best["score_detail"],
             "price": best["price"], "cost": 0, "message": msg,
             "created_at": datetime.now(),
         })
-        logging.info(f"最高分买入信号: {best['code']} {best['name']} score={best['scorer_score']:.2f}（共 {len(buy_candidates)} 只候选）")
 
     # 8. 推送钉钉，成功后才写告警日志
     if pending_alerts:

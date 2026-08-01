@@ -26,13 +26,13 @@ GET /sectors/heatmap?period=24h&start_date=&end_date=
       "sector_code": "J66",
       "change_pct": 2.35,
       "stock_count": 45,
-      "avg_volume": 12345678.5,
-      "start_price": 8.50,
-      "end_price": 8.70
+      "volume": 12345678.5
     }
   ],
   "period": "24h",
-  "total_sectors": 85
+  "total_sectors": 85,
+  "start_date": "2026-05-15",
+  "end_date": "2026-05-16"
 }
 ```
 
@@ -68,7 +68,7 @@ GET /sectors/{sector_name}/stocks?sort_by=change_pct&sort_order=desc&page=1&page
       "name": "浦发银行",
       "change_pct": 3.45,
       "current_price": 9.07,
-      "open_price": 9.00,
+      "first_price": 9.00,
       "high": 9.22,
       "low": 8.93,
       "volume": 171982587,
@@ -83,22 +83,21 @@ GET /sectors/{sector_name}/stocks?sort_by=change_pct&sort_order=desc&page=1&page
 
 ---
 
-## GET /kline/{code}
+## GET /sectors/kline/{code}
 
 获取股票K线数据
 
 ### Request
 
 ```
-GET /kline/{code}?period=daily&start_date=2026-04-16&end_date=2026-05-16
+GET /sectors/kline/{code}?start_date=2026-04-16&end_date=2026-05-16
 ```
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| code | string | 是 | 股票代码（URL路径参数） |
-| period | string | 否 | K线周期: "daily", "weekly", "monthly" (默认"daily") |
-| start_date | string | 是 | 起始日期 (YYYY-MM-DD) |
-| end_date | string | 是 | 结束日期 (YYYY-MM-DD) |
+| code | string | 是 | 股票代码（URL路径参数），支持带交易所前缀格式如 "sh.600000" |
+| start_date | string | 否 | 起始日期 (YYYY-MM-DD)，默认一年前 |
+| end_date | string | 否 | 结束日期 (YYYY-MM-DD)，默认最新数据日期 |
 
 ### Response 200
 

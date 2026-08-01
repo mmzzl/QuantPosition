@@ -2,6 +2,10 @@ from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
 
+# DEPRECATED: StockScorer is deprecated (see REQ-006). Retained here for
+# backward-compatible stock review (ReviewService.analyze). New scoring
+# should use services.scoring.oversold_bounce instead.
+# TODO: migrate ReviewService.analyze() to oversold_bounce_score.
 from services.stock_scorer import StockScorer
 from database import get_db
 

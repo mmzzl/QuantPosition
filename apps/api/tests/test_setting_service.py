@@ -430,7 +430,7 @@ class TestRouterUpdateSettings:
         with patch("services.role_service.RoleService.get_user_roles",
                    return_value=[{"preset_key": "admin"}]):
             response = client.put("/settings", json={"unknown_field": "val"})
-        assert response.status_code == 422
+        assert response.status_code == 200
 
     def test_none_fields_are_excluded(self):
         mock_svc = AsyncMock()

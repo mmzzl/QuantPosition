@@ -1,3 +1,4 @@
+# DEPRECATED: replaced by services.scoring.oversold_bounce. Do not use in new code.
 """筹码分布 — 基于 K 线 + 换手率的估算模型
 
 核心算法:

@@ -352,6 +352,57 @@ class TestExploreAndCandidates:
 
         assert response.status_code == 404
 
+    def test_candidate_backtest_query_param_returns_trades(self):
+        mock_db = make_mock_db_with_rules()
+        cand = {
+            "_id": "507f1f77bcf86cd799439011",
+            "key": "ma10≤ma20*2.0orprice≥high*1.8|ma5<ma20*2.0|p",
+            "backtest_result": {
+                "trades": [{"code": "000001", "pnl_pct": 5.2}],
+                "sharpe": 1.96,
+                "portfolio_return": -3.4,
+                "win_rate": 60.0,
+            },
+        }
+        mock_db.rule_candidates.find_one.return_value = cand
+
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.get(
+                "/rules/candidates/backtest",
+                params={"id": "507f1f77bcf86cd799439011"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["trades"]) == 1
+        assert data["sharpe"] == 1.96
+        mock_db.rule_candidates.find_one.assert_called_once()
+
+    def test_candidate_backtest_not_found_returns_404(self):
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_candidates.find_one.return_value = None
+
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.get(
+                "/rules/candidates/backtest",
+                params={"id": "507f1f77bcf86cd799439099"},
+            )
+
+        assert response.status_code == 404
+        assert "规则不存在" in response.text
+
+    def test_candidate_backtest_invalid_id_returns_404(self):
+        mock_db = make_mock_db_with_rules()
+
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.get(
+                "/rules/candidates/backtest",
+                params={"id": "not-an-objectid"},
+            )
+
+        assert response.status_code == 404
+        assert "规则不存在" in response.text
+
 
 class TestBlacklist:
 
@@ -375,8 +426,169 @@ class TestBlacklist:
         assert response.status_code == 404
 
 
-class TestBackupAndRestore:
+class TestOptimizedCandidates:
+    def test_list_optimized_candidates_empty(self):
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.find.return_value.sort.return_value.skip.return_value.limit.return_value = []
+        mock_db.rule_candidates_optimized.count_documents.return_value = 0
 
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.get("/rules/optimized-candidates")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 0
+        assert data["candidates"] == []
+
+    def test_start_optimize_without_llm_key(self):
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_explore_progress.find_one.return_value = None
+        mock_db.system_settings.find_one.return_value = {}
+
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.post("/rules/optimize-candidates", json={"scope": "all", "limit": 100})
+
+        assert response.status_code == 400
+        assert "LLM" in response.text
+
+    def test_start_optimize_with_llm_key(self):
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_explore_progress.find_one.return_value = None
+        mock_db.system_settings.find_one.return_value = {"llm_api_key": "sk-test"}
+
+        from tasks.rule_explore_tasks import run_rule_optimization
+        fake_task = MagicMock()
+        fake_task.delay.return_value = MagicMock(id="task-123")
+        with patch("routers.rules.run_rule_optimization", fake_task), \
+             patch("routers.rules.get_db", return_value=mock_db):
+            response = client.post("/rules/optimize-candidates", json={"scope": "all", "limit": 100})
+
+        assert response.status_code == 200
+        assert response.json()["task_id"] == "task-123"
+
+    def test_delete_optimized_candidate_404(self):
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.delete_one.return_value = MagicMock(deleted_count=0)
+
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.delete("/rules/optimized-candidates/507f1f77bcf86cd799439099")
+
+        assert response.status_code == 404
+
+    def test_apply_optimized_candidate_404(self):
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.find_one.return_value = None
+
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.post("/rules/optimized-candidates/507f1f77bcf86cd799439099/apply")
+
+        assert response.status_code == 404
+
+    def test_clear_optimized_candidates(self):
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.delete_many.return_value = MagicMock(deleted_count=3)
+
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.delete("/rules/optimized-candidates")
+
+        assert response.status_code == 200
+        assert "3" in response.json()["message"]
+
+
+class TestOptimizeServiceFunctions:
+    def test_try_insert_optimized_writes_doc(self):
+        from services.rule_explorer import try_insert_optimized
+
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.find_one.return_value = None
+        mock_db.rule_blacklist.find_one.return_value = None
+        inserted = MagicMock()
+        mock_db.rule_candidates_optimized.insert_one.return_value = inserted
+
+        parent = {
+            "key": "parent-key-1", "source": "template", "name": "模板_0001",
+            "buy_condition": "price > ma20", "sell_condition": "price < ma10",
+            "risk_condition": "price < cost * 0.9", "priority": 3, "weight": 0.35,
+        }
+        optimized = {
+            "name": "优化版", "buy_condition": "price > ma20 and vol > ma5_vol",
+            "sell_condition": "price < ma10", "risk_condition": "price < cost * 0.92",
+            "optimization_note": "加强量价",
+        }
+
+        with patch("services.rule_explorer.get_db", return_value=mock_db):
+            ok = try_insert_optimized(optimized, parent)
+
+        assert ok is True
+        inserted_doc = mock_db.rule_candidates_optimized.insert_one.call_args[0][0]
+        assert inserted_doc["source"] == "llm_evolve"
+        assert inserted_doc["parent_key"] == "parent-key-1"
+        assert inserted_doc["optimization_note"] == "加强量价"
+
+    def test_try_insert_optimized_invalid_conditions(self):
+        from services.rule_explorer import try_insert_optimized
+
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.find_one.return_value = None
+        mock_db.rule_blacklist.find_one.return_value = None
+
+        parent = {
+            "key": "p1", "source": "template", "name": "t",
+            "buy_condition": "price > ma20", "sell_condition": "price < ma10",
+            "risk_condition": "price < cost * 0.9",
+        }
+        optimized = {
+            "name": "bad", "buy_condition": "price > ma20",
+            "sell_condition": "import os", "risk_condition": "price < cost * 0.9",
+        }
+
+        with patch("services.rule_explorer.get_db", return_value=mock_db):
+            ok = try_insert_optimized(optimized, parent)
+
+        assert ok is False
+        mock_db.rule_candidates_optimized.insert_one.assert_not_called()
+
+    def test_optimize_candidates_with_llm_requires_key(self):
+        from services.rule_explorer import optimize_candidates_with_llm
+
+        mock_db = make_mock_db_with_rules()
+        mock_db.system_settings.find_one.return_value = {}
+
+        with patch("services.rule_explorer.get_db", return_value=mock_db), pytest.raises(ValueError):
+            optimize_candidates_with_llm()
+
+    def test_optimize_candidates_skips_existing(self):
+        from services.rule_explorer import optimize_candidates_with_llm
+
+        mock_db = make_mock_db_with_rules()
+        mock_db.system_settings.find_one.return_value = {"llm_api_key": "sk-test"}
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.find.return_value = [
+            {"parent_key": "parent-key-1"},
+        ]
+        cand = {
+            "key": "parent-key-1", "name": "模板_0001", "source": "template",
+            "buy_condition": "price > ma20", "sell_condition": "price < ma10",
+            "risk_condition": "price < cost * 0.9", "priority": 3, "weight": 0.35,
+        }
+        mock_db.rule_candidates.find.return_value = [cand]
+
+        with patch("services.rule_explorer.get_db", return_value=mock_db), \
+             patch("services.rule_explorer._call_llm_optimize") as mock_llm:
+            mock_llm.return_value = {"buy_condition": "price > ma20"}
+            count = optimize_candidates_with_llm(limit=500)
+
+        assert count == 0
+        mock_llm.assert_not_called()
+
+
+class TestBackupAndRestore:
     def test_list_backups_empty(self):
         mock_db = make_mock_db_with_rules()
 

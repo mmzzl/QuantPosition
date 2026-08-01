@@ -68,6 +68,26 @@ export function applyCandidate(id) {
   return http.post(`/rules/candidates/${id}/apply`)
 }
 
+export function getOptimizedCandidates(params = {}) {
+  return http.get('/rules/optimized-candidates', { params })
+}
+
+export function startOptimizeCandidates(scope = 'all', limit = 500) {
+  return http.post('/rules/optimize-candidates', { scope, limit })
+}
+
+export function deleteOptimizedCandidate(id) {
+  return http.delete(`/rules/optimized-candidates/${id}`)
+}
+
+export function clearOptimizedCandidates() {
+  return http.delete('/rules/optimized-candidates')
+}
+
+export function applyOptimizedCandidate(id) {
+  return http.post(`/rules/optimized-candidates/${id}/apply`)
+}
+
 export function getBackups() {
   return http.get('/rules/backup')
 }

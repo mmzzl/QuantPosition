@@ -107,8 +107,15 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180">
+      <el-table-column label="操作" width="300">
         <template #default="{ row }">
+          <el-button
+            size="small" type="primary" link
+            :disabled="!row.validated"
+            :title="row.validated ? '' : '请先验证该规则'"
+            @click="viewTradeDetail(row)">
+            交易详情
+          </el-button>
           <el-button size="small" type="primary" @click="handleApplySingle(row)">更新规则</el-button>
           <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
         </template>
@@ -144,6 +151,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getCandidates, deleteCandidate, clearCandidates,
@@ -265,6 +273,16 @@ async function handleRemoveBlacklist(row) {
     fetchBlacklist()
     fetchStats()
   } catch { ElMessage.error('移除失败') }
+}
+
+const router = useRouter()
+
+function viewTradeDetail(row) {
+  if (!row.validated) return
+  router.push({
+    path: '/rules/candidates/detail',
+    query: { id: row._id }
+  })
 }
 
 onMounted(() => {

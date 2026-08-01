@@ -1,3 +1,4 @@
+# DEPRECATED: replaced by services.scoring.oversold_bounce. Do not use in new code.
 """量价趋势评分 (40分)"""
 from typing import List, Dict, Any
 

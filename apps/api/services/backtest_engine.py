@@ -3,9 +3,10 @@ import logging
 import random
 import statistics
 from datetime import datetime, timedelta
+from bisect import bisect_left
 from typing import Dict, Any, List, Optional, Tuple
 from database import get_db
-from services.stock_scorer import StockScorer
+from services.scoring.oversold_bounce import oversold_bounce_score, score_detail
 from services import task_progress
 
 
@@ -99,6 +100,10 @@ def _get_dates_sorted(data):
     for code_dates in data.values():
         all_dates.update(code_dates.keys())
     return sorted(all_dates)
+
+
+def _build_date_index(data: dict) -> dict:
+    return {code: sorted(dates.keys()) for code, dates in data.items()}
 
 
 def _build_ctx(indicators, code, name, has_pos, cost, buy_date, today):
@@ -202,7 +207,7 @@ def calculate_metrics(
 
 
 def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=None, end_date=None,
-                 initial_cash=100000, commission=0.001, custom_rules=None, max_stocks=0,
+                 initial_cash=100000, commission=0.001, custom_rules=None,
                  celery_task=None, task_id=None, max_positions=5,
                  max_hold_days=60, cooldown_days=1):
 
@@ -217,11 +222,7 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
     db = get_db()
 
     if not codes:
-        if max_stocks > 0:
-            codes = sample_market_stocks(max_stocks, seed=42)
-            logging.info(f"[BACKTEST] 从指数成分股中抽样 {len(codes)} 只")
-        else:
-            codes = db.stock_kline.distinct("code", {"frequency": 9})
+        codes = db.stock_kline.distinct("code", {"frequency": 9})
 
     name_map = _load_name_map()
 
@@ -238,6 +239,7 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
     logging.info(f"[BACKTEST] 从 stock_indicators 加载数据...")
     data = _load_data(filtered, load_start, end_date)
     dates = _get_dates_sorted(data)
+    date_index = _build_date_index(data)
 
     total_dates = sum(1 for d in dates if load_start <= d <= end_date)
     logging.info(f"[BACKTEST] 交易日: {total_dates} 天, 股票: {len(data)} 只")
@@ -344,73 +346,85 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
                     "hold_days": hold_days,
                     "reason": reason,
                     "triggered_rules": [r["name"] for r in (triggered or [])],
+                    "score_detail": positions[code].get("score_detail"),
                 })
 
                 last_exit_dates[code] = today
                 del positions[code]
 
         # ==== 第二步：买入 ====
-        if len(positions) >= max_positions:
-            continue
+        if len(positions) < max_positions:
+            buy_candidates = []
+            for code in data:
+                if code in positions:
+                    continue
+                if code in last_exit_dates and (today - last_exit_dates[code]).days < cooldown_days:
+                    continue
 
-        buy_candidates = []
-        for code in data:
-            if code in positions:
-                continue
-            if code in last_exit_dates and (today - last_exit_dates[code]).days < cooldown_days:
-                continue
+                ind = data[code].get(date_str)
+                if not ind or ind.get("close", 0) <= 0:
+                    continue
 
-            ind = data[code].get(date_str)
-            if not ind or ind.get("close", 0) <= 0:
-                continue
+                ctx = _build_ctx(ind, code, name_map.get(code, ""),
+                                 False, 0, None, today)
+                if not ctx:
+                    continue
 
-            ctx = _build_ctx(ind, code, name_map.get(code, ""),
-                             False, 0, None, today)
-            if not ctx:
-                continue
+                _, _, buy_score, _ = engine.run(ctx)
+                if buy_score > 0:
+                    s = oversold_bounce_score(
+                        close=ind.get("close", 0), ma5=ind.get("ma5", 0),
+                        ma10=ind.get("ma10", 0), ma20=ind.get("ma20", 0),
+                        ma60=ind.get("ma60", 0),
+                        volume=ind.get("volume", 0), ma5_vol=ind.get("ma5_vol", 0),
+                        high20=ind.get("high20", 0), amplitude=ind.get("amplitude", 0),
+                        is_st=False,
+                    )
+                    if s > 0:
+                        buy_candidates.append((s, 0, code, ind))
 
-            _, _, buy_score, _ = engine.run(ctx)
-            if buy_score > 0:
-                scorer_result = StockScorer().score(code, name_map.get(code, ""), date_str)
-                if scorer_result["total"] >= 60:
-                    buy_candidates.append((scorer_result["total"], code))
+            buy_candidates.sort(key=lambda x: -x[0])
+            remaining_slots = max_positions - len(positions)
 
-        if not buy_candidates:
-            continue
+            for score, _, code, buy_ind in buy_candidates:
+                if len(positions) >= max_positions:
+                    break
 
-        buy_candidates.sort(key=lambda x: x[0], reverse=True)
-        remaining_slots = max_positions - len(positions)
+                ind = data[code][date_str]
+                price = ind["close"]
+                if price <= 0:
+                    continue
 
-        for _, code in buy_candidates:
-            if len(positions) >= max_positions:
-                break
+                position_cash = cash / remaining_slots if remaining_slots > 0 else 0
+                if position_cash <= 0:
+                    break
 
-            ind = data[code][date_str]
-            price = ind["close"]
-            if price <= 0:
-                continue
+                shares = int(position_cash / price)
+                if shares < 100:
+                    continue
 
-            position_cash = cash / remaining_slots if remaining_slots > 0 else 0
-            if position_cash <= 0:
-                break
+                cost_total = shares * price
+                trade_commission = cost_total * commission
+                if cash < cost_total + trade_commission:
+                    continue
 
-            shares = int(position_cash / price)
-            if shares < 100:
-                continue
-
-            cost_total = shares * price
-            trade_commission = cost_total * commission
-            if cash < cost_total + trade_commission:
-                continue
-
-            cash -= cost_total + trade_commission
-            positions[code] = {
-                "cost": price,
-                "buy_date": today,
-                "shares": shares,
-                "cost_total": cost_total,
-            }
-            remaining_slots -= 1
+                cash -= cost_total + trade_commission
+                detail = score_detail(
+                    close=buy_ind.get("close", 0), ma5=buy_ind.get("ma5", 0),
+                    ma10=buy_ind.get("ma10", 0), ma20=buy_ind.get("ma20", 0),
+                    ma60=buy_ind.get("ma60", 0),
+                    volume=buy_ind.get("volume", 0), ma5_vol=buy_ind.get("ma5_vol", 0),
+                    high20=buy_ind.get("high20", 0), amplitude=buy_ind.get("amplitude", 0),
+                    is_st=False,
+                )
+                positions[code] = {
+                    "cost": price,
+                    "buy_date": today,
+                    "shares": shares,
+                    "cost_total": cost_total,
+                    "score_detail": detail,
+                }
+                remaining_slots -= 1
 
         # ---- 记录每日净值 ----
         net_value = cash
@@ -423,6 +437,7 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
 
     # ==== 回测结束：强制平仓 ====
     end_today = pd.Timestamp(end_date).date()
+    liquidated = False
     for code, pos in list(positions.items()):
         last_ind = None
         for d in sorted(data.get(code, {}).keys(), reverse=True):
@@ -453,8 +468,14 @@ def run_backtest(strategy_name="portfolio_rule_engine", codes=None, start_date=N
             "hold_days": (end_today - pos["buy_date"]).days,
             "reason": "timeout",
             "triggered_rules": [],
+            "score_detail": pos.get("score_detail"),
         })
         del positions[code]
+        liquidated = True
+
+    if liquidated and equity_dates:
+        equity_curve.append(cash)
+        equity_dates.append(end_today.isoformat())
 
     # ==== 统计 ====
     all_trades = trade_log

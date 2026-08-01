@@ -55,7 +55,8 @@
     "permission": "rules:view",
     "children": [
       {"path": "/rules", "label": "规则列表", "permission": "rules:view"},
-      {"path": "/candidates", "label": "候选规则", "permission": "rules:view"}
+      {"path": "/candidates", "label": "候选规则", "permission": "rules:view"},
+      {"path": "/rules/optimized", "label": "优化后的候选规则", "permission": "rules:view"}
     ]
   }
 ]

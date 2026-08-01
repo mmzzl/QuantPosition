@@ -1,3 +1,4 @@
+# DEPRECATED: replaced by services.scoring.oversold_bounce. Do not use in new code.
 """资金筹码评分 (35→13分) — 仅保留筹码分布 + 换手率，移除 akshare"""
 import logging
 from typing import Dict, Any, Optional, List

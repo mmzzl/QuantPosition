@@ -2,7 +2,7 @@ import ast
 import re
 import random
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from database import get_db
 
@@ -217,7 +217,6 @@ def try_insert_candidate(rule_set: dict) -> bool:
         "trades": None,
         "composite_score": None,
         "validated": False,
-        "validation_round": 0,  # 0=未验证, 1=通过快筛, 2=完成精测
         "created_at": datetime.now(),
     }
     try:
@@ -528,6 +527,210 @@ def generate_llm_rules(batch_size: int = 100, total_calls: int = 10) -> int:
 
 
 # ============================================================
+# Phase 2.5: LLM 逐条优化已有规则（不凭空生成，改现有候选）
+# ============================================================
+
+OPTIMIZE_SYSTEM_PROMPT = """你是一个A股量化交易规则优化专家。你的任务是基于**已有的规则集**进行优化改进，而不是从零生成新规则。
+
+## 可用变量
+price(最新价), vol(成交量)
+ma5(5日均线), ma10(10日均线), ma20(20日均线), ma60(60日均线)
+ma5_vol(5日均量)
+last_close(昨收), high(20日最高), low(20日最低), open(开盘价)
+has_pos(是否持仓), cost(持仓成本), buy_date(买入日期), today(今天)
+rsi(RSI相对强弱0~100), atr(ATR真实波动幅度), adx(ADX趋势强度), amplitude(当日振幅)
+
+运算符: > < >= <= and or not  函数: abs()
+
+## 优化要求
+1. 保留原有策略思路（趋势/动量/回调等），只修正逻辑缺陷、增强有效性
+2. 买入条件要有选择力，卖出条件要保收益，风控条件**必须**用到 cost 或 atr
+3. 买入和卖出条件不能完全相同
+4. 避免不可能比较（如 price < 0、rsi > 100）和过窄范围
+5. 避免方向矛盾（如 price < ma5 and ma5 > ma10）
+6. 保持条件简洁，不要无意义堆叠
+7. 如果原规则已经很合理，可以只做小幅微调
+
+## 输出格式
+返回 JSON 对象（不要代码块、不要其他文字）：
+{"name": "中文名称", "buy_condition": "...", "sell_condition": "...", "risk_condition": "...", "optimization_note": "优化说明（改了哪里、为什么）"}"""
+
+
+def _call_llm_optimize(rule_set: dict, settings: dict) -> dict:
+    """调用 LLM 优化单条规则集（带 429 退避重试）"""
+    import time
+    import json
+    from openai import OpenAI, RateLimitError, APIError
+
+    api_url = settings.get("llm_api_url", "").rstrip("/")
+    api_key = settings.get("llm_api_key", "")
+    model = settings.get("llm_model", "gpt-4o-mini")
+
+    if not api_url or not api_key:
+        raise ValueError("LLM 未配置")
+
+    user_msg = (
+        "请优化以下规则集：\n"
+        f"- 名称: {rule_set.get('name', '')}\n"
+        f"- 买入: {rule_set.get('buy_condition', '')}\n"
+        f"- 卖出: {rule_set.get('sell_condition', '')}\n"
+        f"- 风控: {rule_set.get('risk_condition', '')}\n\n"
+        "请返回优化后的 JSON。"
+    )
+
+    client = OpenAI(base_url=api_url, api_key=api_key)
+
+    for attempt in range(6):
+        try:
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": OPTIMIZE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.7,
+                max_tokens=2000,
+                stream=False,
+            )
+            content = completion.choices[0].message.content
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0]
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0]
+            result = json.loads(content.strip())
+            if not isinstance(result, dict):
+                raise ValueError("LLM 返回不是 JSON 对象")
+            return result
+        except RateLimitError:
+            wait = (2 ** attempt) + random.uniform(0.5, 1.5)
+            logging.warning(f"[LLM_OPT] 429 限流，等 {wait:.1f}s 后重试 (attempt {attempt+1}/6)")
+            time.sleep(wait)
+        except APIError as e:
+            wait = (2 ** attempt) + random.uniform(0.5, 1.5)
+            logging.warning(f"[LLM_OPT] API 错误: {e}，等 {wait:.1f}s 后重试")
+            time.sleep(wait)
+        except Exception as e:
+            logging.error(f"[LLM_OPT] 未知错误: {e}")
+            if attempt == 5:
+                raise
+            time.sleep(2)
+
+    raise RuntimeError("LLM 优化调用重试 6 次仍然失败")
+
+
+def try_insert_optimized(rule_set: dict, parent: dict) -> bool:
+    """把 LLM 优化后的规则写入 rule_candidates_optimized，返回是否成功"""
+    buy = rule_set.get("buy_condition", "")
+    sell = rule_set.get("sell_condition", "")
+    risk = rule_set.get("risk_condition", "")
+
+    if not buy or not sell or not risk:
+        return False
+
+    for cond in [buy, sell, risk]:
+        if not _validate_condition(cond):
+            return False
+
+    if normalize_condition(buy) == normalize_condition(sell):
+        return False
+
+    parts = sorted([normalize_condition(c) for c in [buy, sell, risk]])
+    key = "|".join(parts)
+
+    db = get_db()
+    if is_blacklisted(key):
+        return False
+    if db.rule_candidates_optimized.find_one({"key": key}):
+        return False
+
+    doc = {
+        "source": "llm_evolve",
+        "parent_key": parent.get("key", ""),
+        "parent_source": parent.get("source", ""),
+        "name": rule_set.get("name", parent.get("name", "优化后规则")),
+        "buy_condition": buy,
+        "sell_condition": sell,
+        "risk_condition": risk,
+        "optimization_note": rule_set.get("optimization_note", ""),
+        "original_buy": parent.get("buy_condition", ""),
+        "original_sell": parent.get("sell_condition", ""),
+        "original_risk": parent.get("risk_condition", ""),
+        "key": key,
+        "priority": parent.get("priority", 3),
+        "weight": parent.get("weight", 0.35),
+        "sharpe": None,
+        "win_rate": None,
+        "total_return": None,
+        "trades": None,
+        "composite_score": None,
+        "validated": False,
+        "created_at": datetime.now(),
+    }
+    try:
+        db.rule_candidates_optimized.insert_one(doc)
+        return True
+    except Exception as e:
+        logging.error(f"写入优化后候选规则失败: {e}")
+        return False
+
+
+def optimize_candidates_with_llm(scope: str = "all", limit: int = 500) -> int:
+    """逐条读取 rule_candidates 中的候选规则，交给 LLM 优化，写入 rule_candidates_optimized
+
+    scope: all / unvalidated / validated
+    limit: 本轮最多处理条数（已优化过的会跳过）
+    """
+    db = get_db()
+    settings = db.system_settings.find_one({"_id": "global"}) or {}
+
+    if not settings.get("llm_api_key"):
+        raise ValueError("请先在系统设置中配置 LLM API Key")
+
+    query = {}
+    if scope == "validated":
+        query["validated"] = True
+    elif scope == "unvalidated":
+        query["validated"] = {"$ne": True}
+
+    # 已优化过的父规则 key（避免重复优化）
+    optimized_parent_keys = set(
+        d.get("parent_key", "") for d in db.rule_candidates_optimized.find({}, {"parent_key": 1})
+    )
+
+    candidates = list(db.rule_candidates.find(query))[:limit]
+    logging.info(f"[LLM_OPT] 读取候选 {len(candidates)} 条（scope={scope}, limit={limit}），已优化 {len(optimized_parent_keys)} 条")
+
+    update_progress("llm_evolve", "LLM逐条优化", llm_evolve_total=len(candidates))
+
+    count = 0
+    skipped = 0
+    failed = 0
+    for idx, cand in enumerate(candidates, 1):
+        if cand.get("key", "") in optimized_parent_keys:
+            skipped += 1
+            continue
+        try:
+            optimized = _call_llm_optimize(cand, settings)
+            if try_insert_optimized(optimized, cand):
+                optimized_parent_keys.add(cand.get("key", ""))
+                count += 1
+            else:
+                failed += 1
+        except Exception as e:
+            failed += 1
+            logging.warning(f"[LLM_OPT] 第 {idx} 条优化失败 ({cand.get('name','')}): {e}")
+
+        if idx % 20 == 0 or idx == len(candidates):
+            update_progress("llm_evolve", "LLM逐条优化",
+                            llm_evolve_done=idx, llm_evolve_count=count)
+
+    update_progress("llm_evolve", "LLM逐条优化",
+                    llm_evolve_done=len(candidates), llm_evolve_count=count)
+    logging.info(f"[LLM_OPT] 完成：新增 {count} 条，跳过已优化 {skipped} 条，失败 {failed} 条")
+    return count
+
+
+# ============================================================
 # Phase 3: 遗传算法
 # ============================================================
 
@@ -655,7 +858,7 @@ def _run_backtest_with_rules(rule_set: dict, stock_codes: List[str],
 
     result = run_backtest(
         codes=stock_codes, start_date=start_date, end_date=end_date,
-        custom_rules=rules
+        custom_rules=rules, max_positions=1
     )
 
     return composite_score(
@@ -664,115 +867,63 @@ def _run_backtest_with_rules(rule_set: dict, stock_codes: List[str],
     ), result
 
 
-def validate_candidates(scope: str = "all", limit: int = 500, backtest_days: int = 360, max_stocks: int = 500):
-    """验证候选规则：多时段回测取平均，不一致的规则降分。自动分批直到全部验证完成"""
-    import pandas as pd
-    from services.backtest_engine import sample_market_stocks
-
+def validate_candidates(scope="all", limit=500, backtest_days=360):
+    """单阶段验证候选规则：单次回测，去除了多时段平均逻辑"""
     db = get_db()
+    stock_codes = db.stock_kline.distinct("code", {"frequency": 9})
+    blacklist_keys = set(d.get("key", "") for d in db.rule_blacklist.find({}, {"key": 1}))
 
     query = {"$or": [{"validated": {"$ne": True}}, {"validated": {"$exists": False}}]}
     if scope != "all":
         query["source"] = scope
 
-    total_unvalidated = db.rule_candidates.count_documents(query)
-    if total_unvalidated == 0:
+    total = db.rule_candidates.count_documents(query)
+    if total == 0:
         logging.info("[VALIDATE] 没有需要验证的候选规则")
         return
 
-    logging.info(f"[VALIDATE] 共 {total_unvalidated} 条待验证，分批处理（每批 {limit} 条）")
+    p_end = datetime.now()
+    p_start = p_end - timedelta(days=backtest_days)
+    logging.info(f"[VALIDATE] 单次回测 {backtest_days} 天：{total} 条待验")
 
-    blacklist_keys = set(d.get("key", "") for d in db.rule_blacklist.find({}, {"key": 1}))
-    periods = 3
-    if backtest_days < periods:
-        backtest_days = periods * 30
-    period_days = backtest_days // periods
-    stock_codes = sample_market_stocks(max_stocks, seed=42)
-    total_validated = 0
-    batch_no = 0
-
+    processed = 0
     while True:
-        candidates = list(db.rule_candidates.find(query).limit(limit))
-        if not candidates:
+        batch = [c for c in db.rule_candidates.find(query).limit(limit)
+                 if c.get("key", "") not in blacklist_keys]
+        if not batch:
             break
-        batch_no += 1
-
-        batch_to_validate = [c for c in candidates if c.get("key", "") not in blacklist_keys]
-        logging.info(f"[VALIDATE] 第{batch_no}批: 取 {len(candidates)} 条"
-                     f"（跳过 {len(candidates) - len(batch_to_validate)} 条黑名单）")
-
-        for i, cand in enumerate(batch_to_validate):
+        for cand in batch:
             try:
-                sharpe_list, ret_list, win_list, trades_list = [], [], [], []
-
-                for p_idx in range(periods):
-                    p_end = datetime.now() - pd.Timedelta(days=p_idx * period_days)
-                    p_start = p_end - pd.Timedelta(days=period_days)
-                    _, result = _run_backtest_with_rules(
-                        cand, stock_codes,
-                        p_start.strftime("%Y-%m-%d"),
-                        p_end.strftime("%Y-%m-%d"),
-                        period_days
-                    )
-                    sharpe_list.append(result.get("sharpe", 0))
-                    ret_list.append(result.get("portfolio_return", 0))
-                    win_list.append(result.get("win_rate", 0))
-                    trades_list.append(result.get("trades", 0))
-
-                avg_sharpe = sum(sharpe_list) / periods
-                avg_return = sum(ret_list) / periods
-                avg_win = sum(win_list) / periods
-                total_trades = sum(trades_list)
-
-                pos_count = sum(1 for s in sharpe_list if s > 0)
-                neg_count = periods - pos_count
-                if pos_count == 0:
-                    variance_penalty = 0.6
-                elif neg_count >= 2:
-                    variance_penalty = 0.75
-                else:
-                    sharpe_std = (sum((s - avg_sharpe) ** 2 for s in sharpe_list) / periods) ** 0.5
-                    if sharpe_std > 2.0:
-                        variance_penalty = 0.8
-                    elif sharpe_std > 1.0:
-                        variance_penalty = 0.9
-                    else:
-                        variance_penalty = 1.0
-
-                score = composite_score(avg_sharpe, avg_return, avg_win, total_trades, period_days)
-                score = round(score * variance_penalty, 2)
-
-                db.rule_candidates.update_one(
-                    {"_id": cand["_id"]},
-                    {"$set": {
-                        "validated": True,
-                        "validation_round": 1,
-                        "composite_score": score,
-                        "portfolio_return": round(avg_return, 2),
-                        "sharpe": round(avg_sharpe, 2),
-                        "win_rate": round(avg_win, 1),
-                        "trades": total_trades,
-                        "periods": {
-                            "count": periods,
-                            "period_days": period_days,
-                            "sharpe_list": [round(s, 2) for s in sharpe_list],
-                            "return_list": [round(r, 2) for r in ret_list],
-                        }
-                    }}
+                score, result = _run_backtest_with_rules(
+                    cand, stock_codes, p_start.strftime("%Y-%m-%d"),
+                    p_end.strftime("%Y-%m-%d"), backtest_days
                 )
-                total_validated += 1
+                trades_list = result.get("trades_list", [])
+                update = {"validated": score > 0, "composite_score": score,
+                          "sharpe": round(result.get("sharpe", 0), 2),
+                          "trades": result.get("trades", 0)}
+                if score > 0:
+                    update["portfolio_return"] = round(result.get("portfolio_return", 0), 2)
+                    update["win_rate"] = round(result.get("win_rate", 0), 1)
+                db.rule_candidates.update_one({"_id": cand["_id"]}, {"$set": update})
+                if trades_list:
+                    db.rule_candidates.update_one(
+                        {"_id": cand["_id"]},
+                        {"$set": {"backtest_result": {
+                            "trades": trades_list,
+                            "sharpe": round(result.get("sharpe", 0), 2),
+                            "portfolio_return": round(result.get("portfolio_return", 0), 2),
+                            "win_rate": round(result.get("win_rate", 0), 1),
+                        }}}
+                    )
+                processed += 1
             except Exception as e:
-                logging.error(f"[VALIDATE] 验证失败: {e}")
+                logging.error(f"[VALIDATE] 失败: {e}")
                 db.rule_candidates.update_one(
                     {"_id": cand["_id"]},
                     {"$set": {"validated": True, "validated_error": str(e)}}
                 )
-
-            if total_validated % 50 == 0:
-                remaining = total_unvalidated - total_validated
-                logging.info(f"[VALIDATE] 进度 {total_validated}/{total_unvalidated}（剩余约 {remaining} 条）")
-
-    logging.info(f"[VALIDATE] 验证完成，共 {total_validated} 条")
+        logging.info(f"[VALIDATE] 进度 {processed}/{total}")
 
 
 # ============================================================
@@ -784,7 +935,7 @@ def apply_candidates() -> str:
     db = get_db()
 
     candidates = list(db.rule_candidates.find(
-        {"validated": True, "validation_round": 1, "composite_score": {"$gt": 0}}
+        {"validated": True, "composite_score": {"$gt": 0}}
     ).sort("composite_score", -1))
 
     if not candidates:

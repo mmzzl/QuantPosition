@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from services.backtest_service import BacktestService
-from schemas.backtest import BacktestRequest, BackendMetricsResponse, TaskStatusResponse
+from schemas.backtest import BacktestRequest, TaskStatusResponse
 
 
 def _make_app(with_auth=True):
@@ -30,7 +30,6 @@ class TestBacktestRequest:
         assert req.days_back == 360
         assert req.initial_cash == 100000
         assert req.commission == 0.001
-        assert req.max_stocks == 500
         assert req.max_positions == 5
         assert req.max_hold_days == 60
         assert req.cooldown_days == 1
@@ -50,23 +49,6 @@ class TestBacktestRequest:
     def test_extra_fields_forbidden(self):
         with pytest.raises(Exception):
             BacktestRequest(unknown_field="value")
-
-
-class TestBackendMetricsResponse:
-    def test_valid_metrics(self):
-        m = BackendMetricsResponse(
-            annual_return=15.2,
-            sharpe_ratio=1.5,
-            max_drawdown=8.3,
-            win_rate=55.0,
-            total_return=12.0,
-            total_trades=100,
-        )
-        assert m.annual_return == 15.2
-        assert m.sharpe_ratio == 1.5
-        assert m.max_drawdown == 8.3
-        assert m.win_rate == 55.0
-        assert m.total_trades == 100
 
 
 class TestTaskStatusResponse:
@@ -104,12 +86,12 @@ class TestBacktestServiceSubmit:
             with patch("services.backtest_service.get_db"):
                 BacktestService.submit(
                     days_back=90, initial_cash=200000, commission=0.0005,
-                    max_stocks=100, max_positions=3, max_hold_days=30,
+                    max_positions=3, max_hold_days=30,
                     cooldown_days=2,
                 )
         mock_delay.assert_called_once_with(
             days_back=90, initial_cash=200000, commission=0.0005,
-            max_stocks=100, max_positions=3, max_hold_days=30,
+            max_positions=3, max_hold_days=30,
             cooldown_days=2,
         )
 
@@ -184,7 +166,7 @@ class TestBacktestEngineEdgeCases:
             mock_db.trading_rules.find.return_value.sort.return_value = []
             mock_db.sector_stocks.find.return_value = []
             mock_get_db.return_value = mock_db
-            result = run_backtest(max_stocks=0)
+            result = run_backtest()
         assert result is not None
         assert result["trades"] == 0
         assert result["processed"] == 0
@@ -201,8 +183,108 @@ class TestBacktestEngineEdgeCases:
                 {"stock_code": "sz.000002", "stock_name": "万科A"},
             ]
             mock_get_db.return_value = mock_db
-            result = run_backtest(max_stocks=2)
+            result = run_backtest()
         assert result["trades"] == 0
+
+    def _make_engine_data(self):
+        """构造 3 只股票 5 个交易日的合成数据, 满足买入/卖出条件"""
+        def row(close, last_close):
+            return {
+                "open": close, "close": close, "high": close * 1.02,
+                "low": close * 0.98, "volume": 500000, "last_close": last_close,
+                "ma5": 154.0, "ma10": 150.0, "ma20": 145.0, "ma60": 140.0,
+                "ma5_vol": 200000, "high20": 160.0, "low20": 140.0,
+                "rsi": 45, "atr": 1.5, "adx": 20, "amplitude": 0.02,
+            }
+
+        dates = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]
+        data = {}
+        prev = {}
+        for i, d in enumerate(dates):
+            for c in ("600001", "600002", "600003"):
+                # 第 3 只第 1 天价格波动大, 不满足买入; 其它可买入
+                close = 150.0
+                last = prev.get(c, 149.0)
+                data.setdefault(c, {})[d] = row(close, last)
+                prev[c] = close
+        return data
+
+    def _make_buy_rules(self):
+        """买入条件成立, 卖出/风控不成立"""
+        return [
+            {"rule_id": 1, "name": "风控", "type": "risk",
+             "condition": "price>1000000", "priority": 1, "weight": 1.0, "enabled": True},
+            {"rule_id": 2, "name": "卖出", "type": "sell",
+             "condition": "price<0.001", "priority": 2, "weight": 0.5, "enabled": True},
+            {"rule_id": 3, "name": "买入", "type": "buy",
+             "condition": "price>0", "priority": 3, "weight": 0.5, "enabled": True},
+        ]
+
+    def test_equity_curve_includes_held_days(self):
+        """持仓期间每个交易日都应记录净值, 强制平仓收益计入最终净值"""
+        from services.backtest_engine import run_backtest
+        data = self._make_engine_data()
+        rules = self._make_buy_rules()
+        with patch("services.backtest_engine.get_db") as mock_get_db, \
+             patch("services.backtest_engine._load_data", return_value=data) as _, \
+             patch("services.backtest_engine._load_name_map",
+                   return_value={"600001": "测试1", "600002": "测试2", "600003": "测试3"}):
+            mock_db = MagicMock()
+            mock_db.stock_kline.distinct.return_value = ["600001", "600002", "600003"]
+            mock_get_db.return_value = mock_db
+            result = run_backtest(
+                codes=["600001", "600002", "600003"],
+                start_date="2026-01-05", end_date="2026-01-09",
+                custom_rules=rules, max_positions=1, max_hold_days=60,
+            )
+        eq = result["equity_curve"]
+        ed = result["equity_dates"]
+        # 每个交易日(含持仓日) + 强制平仓最后一天, 都应记录
+        assert len(eq) >= 5
+        assert ed[-1] == "2026-01-09"
+        # 最后一天(强制平仓)净值应高于持仓期末值或等于卖出后现金
+        assert eq[-1] > 0
+        assert result["trades"] == 1
+        assert result["trades_list"][0]["reason"] == "timeout"
+
+    def test_equity_curve_grows_when_position_gains(self):
+        """持仓期内价格下跌再上涨, 净值曲线应逐日反映 (不复用 continue 跳过)"""
+        from services.backtest_engine import run_backtest
+        dates = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]
+        closes = {"600001": [150.0, 160.0, 170.0, 180.0, 190.0]}
+        data = {}
+        prev = {}
+        for i, d in enumerate(dates):
+            for c, cs in closes.items():
+                close = cs[i]
+                last = prev.get(c, close)
+                data.setdefault(c, {})[d] = {
+                    "open": close, "close": close, "high": close * 1.02,
+                    "low": close * 0.98, "volume": 500000, "last_close": last,
+                    "ma5": 154.0, "ma10": 150.0, "ma20": 145.0, "ma60": 140.0,
+                    "ma5_vol": 200000, "high20": 160.0, "low20": 140.0,
+                    "rsi": 45, "atr": 1.5, "adx": 20, "amplitude": 0.02,
+                }
+                prev[c] = close
+        rules = self._make_buy_rules()
+        with patch("services.backtest_engine.get_db") as mock_get_db, \
+             patch("services.backtest_engine._load_data", return_value=data) as _, \
+             patch("services.backtest_engine._load_name_map",
+                   return_value={"600001": "测试1"}):
+            mock_db = MagicMock()
+            mock_db.stock_kline.distinct.return_value = ["600001"]
+            mock_get_db.return_value = mock_db
+            result = run_backtest(
+                codes=["600001"], start_date="2026-01-05", end_date="2026-01-09",
+                custom_rules=rules, max_positions=1, max_hold_days=60,
+            )
+        eq = result["equity_curve"]
+        ed = result["equity_dates"]
+        # 5 个交易日每天都记录 + 强制平仓追记最终现金
+        assert len(eq) >= 5
+        assert ed[-1] == "2026-01-09"
+        assert eq[-1] > eq[0]  # 价格上涨, 最终净值上升
+        assert result["trades"] == 1
 
 
 class TestBacktestRouterEndpoints:

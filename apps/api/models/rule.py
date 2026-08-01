@@ -52,7 +52,6 @@ class ValidateRequest(BaseModel):
     scope: str = "all"
     limit: int = 500
     backtest_days: int = 360
-    max_stocks: int = 500
 
 
 class BatchDelete(BaseModel):
@@ -79,5 +78,4 @@ class CandidateRule(BaseModel):
     trades: Optional[int] = None
     composite_score: Optional[float] = None
     validated: bool = False
-    validation_round: int = 0
     created_at: Optional[datetime] = None

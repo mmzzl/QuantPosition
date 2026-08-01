@@ -1,6 +1,7 @@
+# DEPRECATED: replaced by services.scoring.oversold_bounce. Do not use in new code.
 import logging
 import math
-from typing import Dict, Any, Optional, Set, List
+from typing import Dict, Any, Optional, Set, List, Tuple
 from datetime import date, datetime, timezone
 
 from database import get_db
@@ -21,6 +22,7 @@ def _pure_code(code: str) -> str:
 class StockScorer:
     MODE_SHORT = "short"
     _industry_cache: Optional[Dict[str, str]] = None
+    _score_cache: Dict[Tuple[str, str], Dict] = {}
     INTENTION_BONUS = {
         "吸筹": 15,
         "洗盘": 10,
@@ -155,15 +157,22 @@ class StockScorer:
         if date_str is None:
             date_str = date.today().strftime("%Y-%m-%d")
 
+        cache_key = (code, date_str)
+        cached = self._score_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         if self._is_filtered(code, name):
-            return {"code": code, "name": name, "date": date_str,
-                    "total": 0, "level": "C",
-                    "breakdown": {
-                        "price_volume": {"total": 0, "breakdown": {}},
-                        "fund_chip": {"total": 0, "breakdown": {}},
-                        "sector_theme": {"total": 0, "breakdown": {}},
-                        "risk": {"total": 0, "breakdown": {}},
-                    }}
+            result = {"code": code, "name": name, "date": date_str,
+                      "total": 0, "level": "C",
+                      "breakdown": {
+                          "price_volume": {"total": 0, "breakdown": {}},
+                          "fund_chip": {"total": 0, "breakdown": {}},
+                          "sector_theme": {"total": 0, "breakdown": {}},
+                          "risk": {"total": 0, "breakdown": {}},
+                      }}
+            self._score_cache[cache_key] = result
+            return result
 
         db = self._get_db()
         klines = list(db.stock_kline.find(
@@ -196,7 +205,7 @@ class StockScorer:
         else:
             level = "C"
 
-        return {
+        result = {
             "code": code, "name": name, "date": date_str,
             "total": total, "level": level,
             "breakdown": {
@@ -206,6 +215,8 @@ class StockScorer:
                 "risk": rc,
             },
         }
+        self._score_cache[cache_key] = result
+        return result
 
     def _cached_score(self, code: str) -> Optional[Dict]:
         db = self._get_db()

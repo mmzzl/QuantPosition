@@ -1,3 +1,4 @@
+# DEPRECATED: replaced by services.scoring.oversold_bounce. Do not use in new code.
 """极简风控评分 (5分)"""
 import logging
 from typing import Dict, Any, Set, Optional

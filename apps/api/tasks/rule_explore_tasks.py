@@ -73,8 +73,47 @@ def run_rule_exploration(self, phases: list = None):
         return {"status": "error", "error": str(e)}
 
 
+@celery_app.task(bind=True, name="tasks.rule_explore.run_rule_optimization")
+def run_rule_optimization(self, scope: str = "all", limit: int = 500):
+    """LLM 逐条优化候选规则任务：读取 rule_candidates → LLM优化 → 写入 rule_candidates_optimized"""
+    from services.rule_explorer import optimize_candidates_with_llm
+
+    db = get_db()
+    db.rule_explore_progress.update_one(
+        {"_id": "current"},
+        {"$set": {
+            "status": "running",
+            "phase": "llm_evolve",
+            "phase_label": "LLM逐条优化中",
+            "task_id": self.request.id,
+            "updated_at": datetime.now(),
+        }},
+        upsert=True
+    )
+
+    try:
+        count = optimize_candidates_with_llm(scope=scope, limit=limit)
+        total = db.rule_candidates_optimized.count_documents({})
+        db.rule_explore_progress.update_one(
+            {"_id": "current"},
+            {"$set": {
+                "status": "done", "phase": "done",
+                "phase_label": f"LLM优化完成（新增 {count} 条）",
+                "llm_evolve_count": count, "optimized_total": total,
+            }}
+        )
+        return {"status": "done", "optimized": count, "total_optimized": total}
+    except Exception as e:
+        logging.error(f"[LLM_OPT] 任务失败: {e}")
+        db.rule_explore_progress.update_one(
+            {"_id": "current"},
+            {"$set": {"status": "error", "error_msg": str(e)}}
+        )
+        return {"status": "error", "error": str(e)}
+
+
 @celery_app.task(bind=True, name="tasks.rule_explore.run_rule_validation")
-def run_rule_validation(self, scope: str = "all", limit: int = 500, backtest_days: int = 360, max_stocks: int = 500):
+def run_rule_validation(self, scope: str = "all", limit: int = 500, backtest_days: int = 360):
     """验证候选规则任务"""
     from services.rule_explorer import validate_candidates
 
@@ -92,7 +131,7 @@ def run_rule_validation(self, scope: str = "all", limit: int = 500, backtest_day
     )
 
     try:
-        validate_candidates(scope, limit=limit, backtest_days=backtest_days, max_stocks=max_stocks)
+        validate_candidates(scope, limit=limit, backtest_days=backtest_days)
         db.rule_explore_progress.update_one(
             {"_id": "current"},
             {"$set": {"status": "done", "phase": "done", "phase_label": "验证完成"}}

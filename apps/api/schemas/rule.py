@@ -39,7 +39,6 @@ class ValidateRequest(BaseModel):
     scope: str = "all"
     limit: int = Field(500, ge=1, le=5000)
     backtest_days: int = Field(360, ge=30, le=3650)
-    max_stocks: int = Field(500, ge=10, le=5000)
 
 
 class BatchDelete(BaseModel):

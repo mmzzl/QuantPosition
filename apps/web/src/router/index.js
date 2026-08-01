@@ -21,7 +21,9 @@ import HeatmapSelection from '@/views/selections/HeatmapSelection.vue'
 import NewsView from '@/views/NewsView.vue'
 import TradingRules from '@/views/TradingRules.vue'
 import RuleCandidates from '@/views/RuleCandidates.vue'
+import RuleOptimized from '@/views/RuleOptimized.vue'
 import BacktestDashboard from '@/views/backtest/BacktestDashboard.vue'
+import BacktestDetail from '@/views/backtest/BacktestDetail.vue'
 import PaperTrading from '@/views/paper/PaperTrading.vue'
 
 const routes = [
@@ -151,10 +153,28 @@ const routes = [
         meta: { requiresAdmin: true, title: '候选规则', permission: 'rules:view', menuPath: '/rules' }
       },
       {
+        path: 'rules/optimized',
+        name: 'RuleOptimized',
+        component: RuleOptimized,
+        meta: { requiresAdmin: true, title: '优化后的候选规则', permission: 'rules:view', menuPath: '/rules' }
+      },
+      {
         path: 'backtest',
         name: 'BacktestDashboard',
         component: BacktestDashboard,
         meta: { requiresAdmin: true, title: '策略回测', permission: 'holdings:view', menuPath: '/backtest' }
+      },
+      {
+        path: 'backtest/detail',
+        name: 'BacktestDetail',
+        component: BacktestDetail,
+        meta: { requiresAdmin: true, title: '交易详情', permission: 'holdings:view', menuPath: '/backtest' }
+      },
+      {
+        path: 'rules/candidates/detail',
+        name: 'CandidateTradeDetail',
+        component: BacktestDetail,
+        meta: { requiresAdmin: true, title: '候选规则交易详情', permission: 'rules:view', menuPath: '/rules' }
       },
       {
         path: 'paper-trading',

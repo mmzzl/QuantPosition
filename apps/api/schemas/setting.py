@@ -3,7 +3,7 @@ from typing import Optional
 
 
 class SettingUpdate(BaseModel):
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
     site_name: Optional[str] = None
     site_description: Optional[str] = None
     site_logo: Optional[str] = None

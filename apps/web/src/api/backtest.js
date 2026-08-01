@@ -11,3 +11,7 @@ export function getTaskStatus(taskId) {
 export function getLatestBacktest() {
   return http.get('/backtest/latest')
 }
+
+export function getCandidateBacktest(id) {
+  return http.get('/rules/candidates/backtest', { params: { id } })
+}

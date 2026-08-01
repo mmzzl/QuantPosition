@@ -1,3 +1,4 @@
+# DEPRECATED: replaced by services.scoring.oversold_bounce. Do not use in new code.
 """题材板块评分 (20分) — 本地 MongoDB 聚合，无外部 API 依赖"""
 import logging
 from typing import Dict, Any, Optional, List
