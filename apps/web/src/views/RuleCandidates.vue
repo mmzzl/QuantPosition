@@ -55,18 +55,16 @@
           </el-select>
         </el-col>
         <el-col :span="6" :offset="6" style="display:flex;align-items:flex-end">
-          <el-button @click="handleValidate" :loading="validating" style="width:100%">验证规则</el-button>
+          <el-button type="primary" @click="handleValidate" :loading="validating" style="width:100%">验证规则</el-button>
         </el-col>
       </el-row>
     </el-card>
 
     <el-row :gutter="12" style="margin-bottom: 16px">
       <el-col :span="6">
-        <el-select v-model="filter.validation_round" clearable placeholder="验证轮次" style="width:100%">
-          <el-option label="待验证" :value="0" />
-          <el-option label="快筛通过" :value="1" />
-          <el-option label="精测完成" :value="2" />
-          <el-option label="已淘汰" :value="-1" />
+        <el-select v-model="filter.validated" clearable placeholder="验证状态" style="width:100%">
+          <el-option label="已验证" :value="true" />
+          <el-option label="未验证" :value="false" />
         </el-select>
       </el-col>
       <el-col :span="6">
@@ -77,7 +75,7 @@
         </el-select>
       </el-col>
       <el-col :span="6">
-        <el-button @click="fetchCandidates">筛选</el-button>
+        <el-button type="primary" @click="fetchCandidates">筛选</el-button>
       </el-col>
     </el-row>
 
@@ -98,13 +96,6 @@
             {{ (row.portfolio_return >= 0 ? '+' : '') + row.portfolio_return + '%' }}
           </span>
           <span v-else style="color:#999">-</span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="validation_round" label="轮次" width="70">
-        <template #default="{ row }">
-          <el-tag :type="row.validation_round === 2 ? 'success' : row.validation_round === 1 ? 'warning' : 'info'" size="small">
-            {{ {0:'待验证', 1:'快筛通过', 2:'精测完成', '-1':'已淘汰'}[row.validation_round] || '-' }}
-          </el-tag>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="300">
@@ -168,7 +159,7 @@ const page = ref(1)
 const pageSize = ref(50)
 const showBlacklist = ref(false)
 const blacklist = ref([])
-const filter = ref({ validation_round: null, source: null })
+const filter = ref({ validated: null, source: null })
 const stats = ref({ total: 0, validated: 0, blacklist: 0, bestScore: 0, bestReturn: null })
 const validateDays = ref(360)
 const validateStocks = ref(500)
@@ -179,7 +170,7 @@ async function fetchCandidates() {
   loading.value = true
   try {
     const params = { page: page.value, page_size: pageSize.value }
-    if (filter.value.validation_round !== null) params.validation_round = filter.value.validation_round
+    if (filter.value.validated !== null) params.validated = filter.value.validated
     if (filter.value.source) params.source = filter.value.source
     const res = await getCandidates(params)
     candidates.value = res.data.candidates || []

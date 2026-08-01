@@ -17,6 +17,10 @@
           <div class="stat-value">{{ stats.total }}</div>
         </el-col>
         <el-col :span="6">
+          <div class="stat-label">已验证</div>
+          <div class="stat-value">{{ stats.validated }}</div>
+        </el-col>
+        <el-col :span="6">
           <div class="stat-label">任务状态</div>
           <div class="stat-value" style="font-size: 16px">
             <el-tag :type="statusType">{{ statusLabel }}</el-tag>
@@ -40,12 +44,43 @@
           <el-input-number v-model="optLimit" :min="1" :max="5000" style="width:100%" />
         </el-col>
         <el-col :span="6">
+          <div class="label">回测天数</div>
+          <el-select v-model="validateDays" style="width:100%">
+            <el-option label="180 天" :value="180" />
+            <el-option label="360 天（推荐）" :value="360" />
+          </el-select>
+        </el-col>
+        <el-col :span="6">
           <div class="label">任务进度</div>
           <el-progress :percentage="progressPct" v-if="progressPct > 0" />
           <span v-else style="color:#909399">未运行</span>
         </el-col>
       </el-row>
+      <el-row :gutter="16" style="margin-top: 12px">
+        <el-col :span="6" style="display:flex;align-items:flex-end">
+          <el-button type="primary" @click="handleValidate" :loading="validating" style="width:100%">验证规则</el-button>
+        </el-col>
+      </el-row>
     </el-card>
+
+    <el-row :gutter="12" style="margin-bottom: 16px">
+      <el-col :span="6">
+        <el-select v-model="filter.validated" clearable placeholder="验证状态" style="width:100%">
+          <el-option label="已验证" :value="true" />
+          <el-option label="未验证" :value="false" />
+        </el-select>
+      </el-col>
+      <el-col :span="6">
+        <el-select v-model="filter.parentSource" clearable placeholder="来源" style="width:100%">
+          <el-option label="模板" value="template" />
+          <el-option label="LLM" value="llm" />
+          <el-option label="遗传" value="genetic" />
+        </el-select>
+      </el-col>
+      <el-col :span="6">
+        <el-button type="primary" @click="fetchCandidates">筛选</el-button>
+      </el-col>
+    </el-row>
 
     <el-table :data="candidates" v-loading="loading" stripe>
       <el-table-column prop="name" label="名称" width="140" show-overflow-tooltip />
@@ -79,8 +114,29 @@
         </template>
       </el-table-column>
       <el-table-column prop="optimization_note" label="优化说明" min-width="160" show-overflow-tooltip />
-      <el-table-column label="操作" width="200">
+      <el-table-column prop="composite_score" label="综合评分" width="90" sortable>
         <template #default="{ row }">
+          <span v-if="row.composite_score != null">{{ row.composite_score }}</span>
+          <span v-else style="color:#999">-</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="回测收益" width="100" sortable prop="portfolio_return">
+        <template #default="{ row }">
+          <span v-if="row.portfolio_return != null" :style="{ color: row.portfolio_return >= 0 ? '#67c23a' : '#f56c6c' }">
+            {{ (row.portfolio_return >= 0 ? '+' : '') + row.portfolio_return + '%' }}
+          </span>
+          <span v-else style="color:#999">-</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="300">
+        <template #default="{ row }">
+          <el-button
+            size="small" type="primary" link
+            :disabled="!row.validated"
+            :title="row.validated ? '' : '请先验证该规则'"
+            @click="viewTradeDetail(row)">
+            交易详情
+          </el-button>
           <el-button size="small" type="primary" @click="handleApplySingle(row)">更新规则</el-button>
           <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
         </template>
@@ -102,22 +158,27 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  getOptimizedCandidates, startOptimizeCandidates,
+  getOptimizedCandidates, startOptimizeCandidates, startValidateOptimizedCandidates,
   deleteOptimizedCandidate, clearOptimizedCandidates, applyOptimizedCandidate,
   getExploreStatus
 } from '@/api/rules'
 
+const router = useRouter()
 const loading = ref(false)
 const optimizing = ref(false)
+const validating = ref(false)
 const candidates = ref([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(50)
-const stats = ref({ total: 0 })
+const stats = ref({ total: 0, validated: 0 })
 const optScope = ref('all')
 const optLimit = ref(500)
+const validateDays = ref(360)
+const filter = ref({ validated: null, parentSource: null })
 const status = ref(null)
 
 function sourceType(s) { return { template: '', llm: 'success', genetic: 'warning' }[s] || 'info' }
@@ -151,7 +212,10 @@ let timer = null
 async function fetchCandidates() {
   loading.value = true
   try {
-    const res = await getOptimizedCandidates({ page: page.value, page_size: pageSize.value })
+    const params = { page: page.value, page_size: pageSize.value }
+    if (filter.value.validated !== null) params.validated = filter.value.validated
+    if (filter.value.parentSource) params.parent_source = filter.value.parentSource
+    const res = await getOptimizedCandidates(params)
     candidates.value = res.data.candidates || []
     total.value = res.data.total || 0
   } catch { ElMessage.error('获取优化后规则失败') }
@@ -160,8 +224,12 @@ async function fetchCandidates() {
 
 async function fetchStats() {
   try {
-    const res = await getOptimizedCandidates({ page: 1, page_size: 1 })
-    stats.value.total = res.data.total || 0
+    const [all, validated] = await Promise.all([
+      getOptimizedCandidates({ page: 1, page_size: 1 }),
+      getOptimizedCandidates({ page: 1, page_size: 1, validated: true }),
+    ])
+    stats.value.total = all.data.total || 0
+    stats.value.validated = validated.data.total || 0
   } catch {}
 }
 
@@ -187,6 +255,27 @@ async function handleOptimize() {
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '启动优化失败')
   } finally { optimizing.value = false }
+}
+
+async function handleValidate() {
+  validating.value = true
+  try {
+    const res = await startValidateOptimizedCandidates('all', optLimit.value, validateDays.value)
+    ElMessage.success(res.data.message || '验证任务已启动')
+    fetchStatus()
+    if (timer) clearInterval(timer)
+    timer = setInterval(fetchStatus, 3000)
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '启动验证失败')
+  } finally { validating.value = false }
+}
+
+function viewTradeDetail(row) {
+  if (!row.validated) return
+  router.push({
+    path: '/rules/optimized/detail',
+    query: { id: row._id }
+  })
 }
 
 async function handleDelete(row) {

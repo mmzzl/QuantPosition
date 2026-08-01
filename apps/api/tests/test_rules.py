@@ -498,6 +498,95 @@ class TestOptimizedCandidates:
         assert response.status_code == 200
         assert "3" in response.json()["message"]
 
+    def test_list_optimized_candidates_filters(self):
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.find.return_value.sort.return_value.skip.return_value.limit.return_value = []
+        mock_db.rule_candidates_optimized.count_documents.return_value = 2
+
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.get(
+                "/rules/optimized-candidates",
+                params={"validated": "true", "parent_source": "template"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 2
+        call_args = mock_db.rule_candidates_optimized.count_documents.call_args
+        assert call_args[0][0] == {"validated": True, "parent_source": "template"}
+
+    def test_start_optimized_validate_starts_task(self):
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_explore_progress.find_one.return_value = None
+
+        from tasks.rule_explore_tasks import run_rule_validation
+        fake_task = MagicMock()
+        fake_task.delay.return_value = MagicMock(id="task-opt-validate")
+        with patch("routers.rules.run_rule_validation", fake_task), \
+             patch("routers.rules.get_db", return_value=mock_db):
+            response = client.post(
+                "/rules/optimized-candidates/validate",
+                json={"scope": "all", "limit": 100, "backtest_days": 180},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["task_id"] == "task-opt-validate"
+        args, kwargs = fake_task.delay.call_args
+        assert args[0] == "all"
+        assert args[2] == 180
+        assert kwargs["target"] == "optimized"
+
+    def test_start_optimized_validate_conflict_when_running(self):
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_explore_progress.find_one.return_value = {"status": "running", "updated_at": None}
+
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.post("/rules/optimized-candidates/validate", json={})
+
+        assert response.status_code == 409
+
+    def test_optimized_candidate_backtest_returns_trades(self):
+        mock_db = make_mock_db_with_rules()
+        cand = {
+            "_id": "507f1f77bcf86cd799439011",
+            "key": "opt-key-1",
+            "backtest_result": {
+                "trades": [{"code": "600519", "pnl_pct": 8.8}],
+                "sharpe": 2.11,
+                "portfolio_return": 15.2,
+                "win_rate": 66.7,
+            },
+        }
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.find_one.return_value = cand
+
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.get(
+                "/rules/optimized-candidates/backtest",
+                params={"id": "507f1f77bcf86cd799439011"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["trades"]) == 1
+        assert data["sharpe"] == 2.11
+        assert data["portfolio_return"] == 15.2
+        mock_db.rule_candidates_optimized.find_one.assert_called_once()
+
+    def test_optimized_candidate_backtest_not_found_returns_404(self):
+        mock_db = make_mock_db_with_rules()
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.find_one.return_value = None
+
+        with patch("routers.rules.get_db", return_value=mock_db):
+            response = client.get(
+                "/rules/optimized-candidates/backtest",
+                params={"id": "507f1f77bcf86cd799439099"},
+            )
+
+        assert response.status_code == 404
+        assert "规则不存在" in response.text
+
 
 class TestOptimizeServiceFunctions:
     def test_try_insert_optimized_writes_doc(self):

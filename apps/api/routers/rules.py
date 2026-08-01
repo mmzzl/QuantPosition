@@ -269,13 +269,16 @@ async def apply_single_candidate(
 async def list_optimized_candidates(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    source: Optional[str] = None,
+    validated: Optional[bool] = None,
+    parent_source: Optional[str] = None,
     current_user: AuthenticatedUser = Depends(get_current_user)
 ):
     db = get_db()
     query = {}
-    if source:
-        query["source"] = source
+    if validated is not None:
+        query["validated"] = validated
+    if parent_source:
+        query["parent_source"] = parent_source
 
     total = db.rule_candidates_optimized.count_documents(query)
     items = list(db.rule_candidates_optimized.find(query)
@@ -290,6 +293,45 @@ async def list_optimized_candidates(
 class OptimizeRequest(BaseModel):
     scope: str = "all"
     limit: int = 500
+
+
+@router.post("/optimized-candidates/validate")
+async def start_optimized_validate(
+    data: ValidateRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """启动优化后候选规则验证（复用候选验证引擎，落盘到 rule_candidates_optimized）"""
+    db = get_db()
+    progress = db.rule_explore_progress.find_one({"_id": "current"})
+    progress = _reset_stale_progress(progress, db) if progress else progress
+    if progress and progress.get("status") == "running":
+        raise HTTPException(status_code=409, detail="已有任务在运行中，请等待完成")
+
+    task = run_rule_validation.delay(data.scope, data.limit, data.backtest_days, target="optimized")
+    return {"task_id": task.id, "message": "优化后规则验证任务已启动"}
+
+
+@router.get("/optimized-candidates/backtest")
+async def get_optimized_candidate_backtest(
+    id: str = Query(..., description="优化后候选规则 _id"),
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    db = get_db()
+    try:
+        cand = db.rule_candidates_optimized.find_one({"_id": ObjectId(id)})
+    except Exception:
+        raise HTTPException(status_code=404, detail="规则不存在")
+    if not cand:
+        raise HTTPException(status_code=404, detail="规则不存在")
+    result = cand.get("backtest_result") or {}
+    trades = result.get("trades", [])
+    return {
+        "trades": trades,
+        "sharpe": round(result.get("sharpe", 0), 2),
+        "portfolio_return": round(result.get("portfolio_return", 0), 2),
+        "win_rate": round(result.get("win_rate", 0), 1),
+        "total_trades": len(trades),
+    }
 
 
 @router.post("/optimize-candidates")

@@ -870,6 +870,17 @@ def _run_backtest_with_rules(rule_set: dict, stock_codes: List[str],
 def validate_candidates(scope="all", limit=500, backtest_days=360):
     """单阶段验证候选规则：单次回测，去除了多时段平均逻辑"""
     db = get_db()
+    _validate_candidates_in_collection(db.rule_candidates, scope, limit, backtest_days)
+
+
+def validate_optimized_candidates(scope="all", limit=500, backtest_days=360):
+    """验证优化后的候选规则：单次回测，复用候选规则验证引擎"""
+    db = get_db()
+    _validate_candidates_in_collection(db.rule_candidates_optimized, scope, limit, backtest_days)
+
+
+def _validate_candidates_in_collection(collection, scope="all", limit=500, backtest_days=360):
+    db = get_db()
     stock_codes = db.stock_kline.distinct("code", {"frequency": 9})
     blacklist_keys = set(d.get("key", "") for d in db.rule_blacklist.find({}, {"key": 1}))
 
@@ -877,7 +888,7 @@ def validate_candidates(scope="all", limit=500, backtest_days=360):
     if scope != "all":
         query["source"] = scope
 
-    total = db.rule_candidates.count_documents(query)
+    total = collection.count_documents(query)
     if total == 0:
         logging.info("[VALIDATE] 没有需要验证的候选规则")
         return
@@ -888,7 +899,7 @@ def validate_candidates(scope="all", limit=500, backtest_days=360):
 
     processed = 0
     while True:
-        batch = [c for c in db.rule_candidates.find(query).limit(limit)
+        batch = [c for c in collection.find(query).limit(limit)
                  if c.get("key", "") not in blacklist_keys]
         if not batch:
             break
@@ -905,9 +916,9 @@ def validate_candidates(scope="all", limit=500, backtest_days=360):
                 if score > 0:
                     update["portfolio_return"] = round(result.get("portfolio_return", 0), 2)
                     update["win_rate"] = round(result.get("win_rate", 0), 1)
-                db.rule_candidates.update_one({"_id": cand["_id"]}, {"$set": update})
+                collection.update_one({"_id": cand["_id"]}, {"$set": update})
                 if trades_list:
-                    db.rule_candidates.update_one(
+                    collection.update_one(
                         {"_id": cand["_id"]},
                         {"$set": {"backtest_result": {
                             "trades": trades_list,
@@ -919,7 +930,7 @@ def validate_candidates(scope="all", limit=500, backtest_days=360):
                 processed += 1
             except Exception as e:
                 logging.error(f"[VALIDATE] 失败: {e}")
-                db.rule_candidates.update_one(
+                collection.update_one(
                     {"_id": cand["_id"]},
                     {"$set": {"validated": True, "validated_error": str(e)}}
                 )

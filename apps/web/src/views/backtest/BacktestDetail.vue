@@ -115,7 +115,7 @@
 </template>
 
 <script>
-import { getLatestBacktest, getCandidateBacktest } from '@/api/backtest'
+import { getLatestBacktest, getCandidateBacktest, getOptimizedCandidateBacktest } from '@/api/backtest'
 
 export default {
   data() {
@@ -123,10 +123,14 @@ export default {
   },
   computed: {
     isCandidate() {
-      return this.$route.name === 'CandidateTradeDetail'
+      return this.$route.name === 'CandidateTradeDetail' || this.$route.name === 'OptimizedCandidateTradeDetail'
+    },
+    isOptimizedCandidate() {
+      return this.$route.name === 'OptimizedCandidateTradeDetail'
     },
     backLabel() {
-      return this.isCandidate ? '← 返回候选规则' : '← 返回回测'
+      if (this.isCandidate) return this.isOptimizedCandidate ? '← 返回优化后候选规则' : '← 返回候选规则'
+      return '← 返回回测'
     }
   },
   async created() {
@@ -142,12 +146,14 @@ export default {
   },
   methods: {
     goBack() {
-      this.$router.push(this.isCandidate ? '/candidates' : '/backtest')
+      if (this.isCandidate) this.$router.push(this.isOptimizedCandidate ? '/rules/optimized' : '/candidates')
+      else this.$router.push('/backtest')
     },
     async loadCandidateTrades(id) {
       this.loading = true
       try {
-        const { data } = await getCandidateBacktest(id)
+        const api = this.isOptimizedCandidate ? getOptimizedCandidateBacktest : getCandidateBacktest
+        const { data } = await api(id)
         this.backtestResult = data
         this.trades = data.trades || []
       } catch (e) {

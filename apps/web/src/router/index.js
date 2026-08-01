@@ -177,6 +177,12 @@ const routes = [
         meta: { requiresAdmin: true, title: '候选规则交易详情', permission: 'rules:view', menuPath: '/rules' }
       },
       {
+        path: 'rules/optimized/detail',
+        name: 'OptimizedCandidateTradeDetail',
+        component: BacktestDetail,
+        meta: { requiresAdmin: true, title: '优化后规则交易详情', permission: 'rules:view', menuPath: '/rules' }
+      },
+      {
         path: 'paper-trading',
         name: 'PaperTrading',
         component: PaperTrading,

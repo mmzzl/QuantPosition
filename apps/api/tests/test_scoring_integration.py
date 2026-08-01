@@ -115,3 +115,51 @@ class TestRuleExplorerNoValidationRound:
         import services.rule_explorer as re
         src = open(re.__file__, encoding="utf-8").read()
         assert "validation_round" not in src, "rule_explorer.py 仍引用 validation_round"
+
+
+class TestOptimizedValidationService:
+    def test_validate_optimized_candidates_writes_result(self):
+        from services.rule_explorer import validate_optimized_candidates
+
+        cand = {
+            "_id": "507f1f77bcf86cd799439011",
+            "key": "opt-key-1",
+            "buy_condition": "price > ma20",
+            "sell_condition": "price < ma10",
+            "risk_condition": "price < cost * 0.9",
+        }
+        mock_db = MagicMock()
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.count_documents.return_value = 1
+        mock_db.rule_candidates_optimized.find.return_value.limit.side_effect = [[cand], []]
+        mock_db.stock_kline.distinct.return_value = ["000001"]
+        mock_db.rule_blacklist.find.return_value = []
+
+        fake_result = {
+            "trades_list": [{"code": "000001", "pnl_pct": 5.0}],
+            "trades": 6,
+            "sharpe": 1.8,
+            "portfolio_return": 12.3,
+            "win_rate": 66.7,
+        }
+        with patch("services.rule_explorer.get_db", return_value=mock_db), \
+             patch("services.rule_explorer._run_backtest_with_rules", return_value=(75.5, fake_result)) as mock_bt:
+            validate_optimized_candidates(backtest_days=360)
+
+        mock_bt.assert_called_once()
+        updates = [c[0][1] for c in mock_db.rule_candidates_optimized.update_one.call_args_list]
+        assert updates[0]["$set"]["validated"] is True
+        assert updates[0]["$set"]["composite_score"] == 75.5
+        assert updates[1]["$set"]["backtest_result"]["portfolio_return"] == 12.3
+
+    def test_validate_optimized_candidates_no_pending(self):
+        from services.rule_explorer import validate_optimized_candidates
+
+        mock_db = MagicMock()
+        mock_db.rule_candidates_optimized = MagicMock()
+        mock_db.rule_candidates_optimized.count_documents.return_value = 0
+
+        with patch("services.rule_explorer.get_db", return_value=mock_db):
+            validate_optimized_candidates()
+
+        mock_db.rule_candidates_optimized.find.assert_not_called()

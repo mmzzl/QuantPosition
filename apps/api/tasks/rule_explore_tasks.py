@@ -113,17 +113,21 @@ def run_rule_optimization(self, scope: str = "all", limit: int = 500):
 
 
 @celery_app.task(bind=True, name="tasks.rule_explore.run_rule_validation")
-def run_rule_validation(self, scope: str = "all", limit: int = 500, backtest_days: int = 360):
-    """验证候选规则任务"""
-    from services.rule_explorer import validate_candidates
+def run_rule_validation(
+    self, scope: str = "all", limit: int = 500, backtest_days: int = 360,
+    target: str = "candidates"
+):
+    """验证候选规则任务（target: candidates / optimized）"""
+    from services.rule_explorer import validate_candidates, validate_optimized_candidates
 
     db = get_db()
+    is_optimized = target == "optimized"
     db.rule_explore_progress.update_one(
         {"_id": "current"},
         {"$set": {
             "status": "running",
             "phase": "validation",
-            "phase_label": "规则验证中",
+            "phase_label": "优化后规则验证中" if is_optimized else "规则验证中",
             "task_id": self.request.id,
             "updated_at": datetime.now(),
         }},
@@ -131,7 +135,10 @@ def run_rule_validation(self, scope: str = "all", limit: int = 500, backtest_day
     )
 
     try:
-        validate_candidates(scope, limit=limit, backtest_days=backtest_days)
+        if is_optimized:
+            validate_optimized_candidates(scope, limit=limit, backtest_days=backtest_days)
+        else:
+            validate_candidates(scope, limit=limit, backtest_days=backtest_days)
         db.rule_explore_progress.update_one(
             {"_id": "current"},
             {"$set": {"status": "done", "phase": "done", "phase_label": "验证完成"}}

@@ -15,3 +15,7 @@ export function getLatestBacktest() {
 export function getCandidateBacktest(id) {
   return http.get('/rules/candidates/backtest', { params: { id } })
 }
+
+export function getOptimizedCandidateBacktest(id) {
+  return http.get('/rules/optimized-candidates/backtest', { params: { id } })
+}

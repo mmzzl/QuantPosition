@@ -76,6 +76,10 @@ export function startOptimizeCandidates(scope = 'all', limit = 500) {
   return http.post('/rules/optimize-candidates', { scope, limit })
 }
 
+export function startValidateOptimizedCandidates(scope = 'all', limit = 500, backtest_days = 360) {
+  return http.post('/rules/optimized-candidates/validate', { scope, limit, backtest_days })
+}
+
 export function deleteOptimizedCandidate(id) {
   return http.delete(`/rules/optimized-candidates/${id}`)
 }
