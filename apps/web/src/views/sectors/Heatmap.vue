@@ -102,7 +102,7 @@ function cellStyle(v) {
   return { '--intensity': 0.25 + (a/10)*0.55, '--cell': '22, 163, 74' }
 }
 
-async function fetchHeatmap() {
+async function fetchHeatmap(retryCount = 0) {
   loading.value = true
   try {
     const p = { period: selectedPeriod.value }
@@ -111,8 +111,15 @@ async function fetchHeatmap() {
     }
     const r = await getSectorHeatmap(p)
     sectors.value = r.data.sectors || []
-  } catch (e) { ElMessage.error('获取热力图数据失败') }
-  finally { loading.value = false }
+  } catch (e) {
+    // 首次失败自动重试一次（处理 --reload 模式下服务短暂重启的情况）
+    if (retryCount < 1) {
+      setTimeout(() => fetchHeatmap(retryCount + 1), 800)
+      return
+    }
+    console.error('[Heatmap] 请求失败:', e?.message || e)
+    ElMessage.error('获取热力图数据失败')
+  } finally { loading.value = false }
 }
 
 function goToStockList(name) {
