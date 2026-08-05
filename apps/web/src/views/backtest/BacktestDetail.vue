@@ -165,7 +165,7 @@ export default {
     async loadTradeDetail(code, entry) {
       try {
         const { data } = await getLatestBacktest()
-        const trades = data?.trades || data?.trades_list || []
+        const trades = data?.trades_list || (Array.isArray(data?.trades) ? data.trades : [])
         this.trade = trades.find(t => t.code === code && t.entry_date === entry) || null
         if (!this.trade) this.error = `未找到 ${code} ${entry} 的交易记录`
       } catch (e) { this.error = e.response?.data?.detail || e.message }

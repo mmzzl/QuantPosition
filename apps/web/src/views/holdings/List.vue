@@ -299,14 +299,23 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.holdings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
 .page-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
 }
 
 .page-header h2 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
   margin: 0;
 }
 
@@ -317,23 +326,33 @@ onUnmounted(() => {
 
 .action-buttons {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   flex-wrap: nowrap;
 }
 
+/* — 表格内数字字体 — */
+:deep(.el-table .cell) {
+  font-variant-numeric: tabular-nums;
+}
+
+/* — 涨跌色 — */
 .profit {
-  color: #f56c6c;
+  color: var(--up);
+  font-weight: 600;
 }
 
 .loss {
-  color: #67c23a;
+  color: var(--down);
+  font-weight: 600;
 }
 
 :deep(.el-table .profit) {
-  color: #f56c6c;
+  color: var(--up) !important;
+  font-weight: 600;
 }
 
 :deep(.el-table .loss) {
-  color: #67c23a;
+  color: var(--down) !important;
+  font-weight: 600;
 }
 </style>

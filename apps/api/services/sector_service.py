@@ -62,7 +62,13 @@ class SectorService:
         ))
         for ss in sector_stocks:
             raw_code = ss["stock_code"]
-            pure_code = raw_code.split(".")[0] if "." in raw_code else raw_code
+            # stock_code format: "sh.600000" or "000001" → extract numeric part
+            if "." in raw_code:
+                parts = raw_code.split(".")
+                # "sh.600000" → "600000" (take last part), "600000.SH" → "600000"
+                pure_code = parts[1] if len(parts[1]) >= 6 else parts[0]
+            else:
+                pure_code = raw_code
             if ss["sector_name"] in seen:
                 seen[ss["sector_name"]]["stocks"].append(pure_code)
 
@@ -186,7 +192,12 @@ class SectorService:
         code_map = {}
         for s in stocks_in_sector:
             raw_code = s["stock_code"]
-            pure_code = raw_code.split(".")[0] if "." in raw_code else raw_code
+            # stock_code format: "sh.600000" → extract numeric part
+            if "." in raw_code:
+                parts = raw_code.split(".")
+                pure_code = parts[1] if len(parts[1]) >= 6 else parts[0]
+            else:
+                pure_code = raw_code
             pure_codes.append(pure_code)
             code_map[pure_code] = raw_code
 
@@ -210,7 +221,12 @@ class SectorService:
         stock_list = []
         for s in stocks_in_sector:
             raw_code = s["stock_code"]
-            pure_code = raw_code.split(".")[0] if "." in raw_code else raw_code
+            # stock_code format: "sh.600000" → extract numeric part
+            if "." in raw_code:
+                parts = raw_code.split(".")
+                pure_code = parts[1] if len(parts[1]) >= 6 else parts[0]
+            else:
+                pure_code = raw_code
             prices = stock_prices.get(pure_code, {})
             first_kline = prices.get("first", {})
             last_kline = prices.get("last", {})
@@ -222,7 +238,7 @@ class SectorService:
                 change_pct = ((current_price - first_price) / first_price) * 100
 
             stock_list.append({
-                "code": raw_code,
+                "code": pure_code,
                 "name": s.get("stock_name", ""),
                 "change_pct": round(change_pct, 2),
                 "current_price": current_price,
@@ -266,9 +282,10 @@ class SectorService:
         kline_collection = db[SectorService.KLINE_COLLECTION]
         sector_collection = db[SectorService.SECTOR_COLLECTION]
 
-        # 处理代码格式
+        # 处理代码格式: "sh.600000" → "600000"
         if "." in code:
-            pure_code = code.split(".")[0]
+            parts = code.split(".")
+            pure_code = parts[1] if len(parts[1]) >= 6 else parts[0]
         else:
             pure_code = code
 

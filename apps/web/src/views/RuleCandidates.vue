@@ -29,7 +29,7 @@
         </el-col>
         <el-col :span="6">
           <div class="stat-label">最优收益</div>
-          <div class="stat-value" :style="{ color: stats.bestReturn >= 0 ? '#67c23a' : '#f56c6c' }">
+          <div class="stat-value" :style="{ color: stats.bestReturn >= 0 ? '#f56c6c' : '#67c23a' }">
             {{ stats.bestReturn != null ? (stats.bestReturn >= 0 ? '+' : '') + stats.bestReturn + '%' : '-' }}
           </div>
         </el-col>
@@ -92,7 +92,7 @@
       <el-table-column prop="composite_score" label="综合评分" width="90" sortable />
       <el-table-column label="回测收益" width="100" sortable prop="portfolio_return">
         <template #default="{ row }">
-          <span v-if="row.portfolio_return != null" :style="{ color: row.portfolio_return >= 0 ? '#67c23a' : '#f56c6c' }">
+          <span v-if="row.portfolio_return != null" :style="{ color: row.portfolio_return >= 0 ? '#f56c6c' : '#67c23a' }">
             {{ (row.portfolio_return >= 0 ? '+' : '') + row.portfolio_return + '%' }}
           </span>
           <span v-else style="color:#999">-</span>

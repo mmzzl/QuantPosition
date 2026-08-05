@@ -122,7 +122,7 @@
       </el-table-column>
       <el-table-column label="回测收益" width="100" sortable prop="portfolio_return">
         <template #default="{ row }">
-          <span v-if="row.portfolio_return != null" :style="{ color: row.portfolio_return >= 0 ? '#67c23a' : '#f56c6c' }">
+          <span v-if="row.portfolio_return != null" :style="{ color: row.portfolio_return >= 0 ? '#f56c6c' : '#67c23a' }">
             {{ (row.portfolio_return >= 0 ? '+' : '') + row.portfolio_return + '%' }}
           </span>
           <span v-else style="color:#999">-</span>
